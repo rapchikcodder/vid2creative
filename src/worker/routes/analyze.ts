@@ -3,7 +3,7 @@ import { Env, AppError, FrameAnalysis } from '../types';
 import { getSession, updateSession, saveFrameAnalysis, uploadToR2, getDailyUsage, incrementDailyUsage } from '../services/storage';
 import { analyzeFrame } from '../services/vision';
 
-const DAILY_NEURON_LIMIT = 100000;
+const DAILY_NEURON_LIMIT = 5000;
 const WARNING_THRESHOLD = 0.8;
 const MAX_FRAMES_PER_SESSION = 200;
 
@@ -34,7 +34,7 @@ app.post('/', async (c) => {
   // Check neuron budget
   const currentUsage = await getDailyUsage(c.env);
   if (currentUsage >= DAILY_NEURON_LIMIT) {
-    throw new AppError('RATE_LIMITED', 'Daily neuron limit reached. Try again tomorrow.', 429);
+    throw new AppError('RATE_LIMITED', 'Daily limit of 5,000 neurons reached. Resets at midnight UTC.', 429);
   }
 
   // Decode base64 image

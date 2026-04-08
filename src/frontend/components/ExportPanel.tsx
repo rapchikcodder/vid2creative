@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { exportCreative } from '../lib/api';
+import { uploadVideo, exportCreative } from '../lib/api';
 import type { Session, ExtractedFrame, CreativeConfig } from '../lib/types';
 
 interface Props {
   session: Session;
+  videoFile: File;
   frames: ExtractedFrame[];
   config: CreativeConfig;
   onConfigChange: (config: CreativeConfig) => void;
@@ -13,11 +14,12 @@ interface Props {
 const PRESETS = [
   { label: 'Mobile', width: 360, height: 640 },
   { label: 'Mobile Alt', width: 320, height: 480 },
-  { label: 'Banner', width: 300, height: 250 },
+  { label: 'Landscape', width: 640, height: 360 },
   { label: 'Square', width: 400, height: 400 },
+  { label: 'Banner', width: 300, height: 250 },
 ];
 
-export default function ExportPanel({ session, frames, config, onConfigChange, onBack }: Props) {
+export default function ExportPanel({ session, videoFile, frames, config, onConfigChange, onBack }: Props) {
   const [exporting, setExporting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
@@ -37,15 +39,26 @@ export default function ExportPanel({ session, frames, config, onConfigChange, o
     onConfigChange({ ...config, ...patch });
   }
 
+  const uploadedRef = useRef<{ sessionId: string; videoUrl: string } | null>(null);
+
+  async function ensureUploaded(): Promise<{ sessionId: string; videoUrl: string }> {
+    if (uploadedRef.current) return uploadedRef.current;
+    const result = await uploadVideo(videoFile);
+    uploadedRef.current = result;
+    return result;
+  }
+
   async function handleExport() {
     setExporting(true);
     setError(null);
     try {
-      const blob = await exportCreative(session.id, config);
+      const { sessionId, videoUrl } = await ensureUploaded();
+      const exportConfig = { ...config, videoUrl };
+      const blob = await exportCreative(sessionId, exportConfig);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `creative-${session.id.slice(0, 8)}.html`;
+      a.download = `creative-${sessionId.slice(0, 8)}.html`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -59,7 +72,9 @@ export default function ExportPanel({ session, frames, config, onConfigChange, o
     setPreviewing(true);
     setError(null);
     try {
-      const blob = await exportCreative(session.id, config);
+      const { sessionId, videoUrl } = await ensureUploaded();
+      const exportConfig = { ...config, videoUrl };
+      const blob = await exportCreative(sessionId, exportConfig);
       const text = await blob.text();
       setPreviewHtml(text);
     } catch (err) {

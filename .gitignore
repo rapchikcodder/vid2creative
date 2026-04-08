@@ -8,3 +8,6 @@ Thumbs.db
 debug-frames/
 test-frames/
 *.mp4
+
+# machine-specific MCP server config (each dev generates their own)
+.mcp.json

@@ -27,11 +27,11 @@ from pathlib import Path
 # Tuned to match ~900kbps @ 1080p (Clipchamp/YouTube quality)
 # ---------------------------------------------------------------------------
 AV1_CRF = {
-    "4k":   {"balanced": 38, "high": 32, "archival": 26, "streaming": 38},
-    "1440": {"balanced": 36, "high": 30, "archival": 24, "streaming": 36},
-    "1080": {"balanced": 35, "high": 28, "archival": 22, "streaming": 35},
-    "720":  {"balanced": 33, "high": 26, "archival": 20, "streaming": 33},
-    "sd":   {"balanced": 30, "high": 24, "archival": 18, "streaming": 30},
+    "4k":   {"balanced": 50, "high": 40, "archival": 30, "streaming": 50},
+    "1440": {"balanced": 50, "high": 40, "archival": 28, "streaming": 50},
+    "1080": {"balanced": 52, "high": 42, "archival": 26, "streaming": 52},
+    "720":  {"balanced": 50, "high": 40, "archival": 24, "streaming": 50},
+    "sd":   {"balanced": 48, "high": 38, "archival": 22, "streaming": 48},
 }
 
 # ---------------------------------------------------------------------------
@@ -119,8 +119,8 @@ def build_av1_args(tier, mode):
     return [
         "-c:v", "libsvtav1",
         "-crf", str(crf),
-        "-preset", "8",       # 0=slowest/best .. 13=fastest; 8=fast+good quality
-        "-pix_fmt", "yuv420p",
+        "-preset", "6",       # 0=slowest/best .. 13=fastest; 6=good quality+speed
+        "-pix_fmt", "yuv420p10le",  # 10-bit: 5-10% better compression at same quality
         "-svtav1-params", "tune=0:enable-overlays=1:scd=1",
     ], crf
 
@@ -199,14 +199,16 @@ def compress_video(input_path, output_path=None, mode="balanced",
     # ---- AV1 path ----
     if codec == "av1":
         video_args, crf_val = build_av1_args(tier, mode)
+        av1_audio = "64k"
         print("  Encoder  : SVT-AV1 (CPU, fast)")
         print("  CRF      : " + str(crf_val) + "  (AV1 scale 0-63)")
+        print("  Audio    : AAC " + av1_audio)
         print()
         print("  Compressing...")
 
         cmd = (["ffmpeg", "-i", str(input_path)]
                + video_args
-               + ["-c:a", "aac", "-b:a", audio_bitrate]
+               + ["-c:a", "aac", "-b:a", av1_audio]
                + ["-movflags", "+faststart", "-y", str(output_path)])
         result = subprocess.run(cmd, capture_output=True, text=True)
 

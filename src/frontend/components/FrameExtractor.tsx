@@ -1,21 +1,68 @@
-import React, { useState, useRef } from 'react';
-import { analyzeFrame, processVideo } from '../lib/api';
-import type { Session, ExtractedFrame, FrameAnalysis, OverlayElement, AnimationType, ProcessResponse } from '../lib/types';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { uploadVideo, detectActions, analyzeFrame } from '../lib/api';
+import type { Session, ExtractedFrame, FrameAnalysis, OverlayElement, AnimationType, ScoredFrame, ActionCluster, DetectActionsResponse } from '../lib/types';
 
-const MAX_ACTIONS = 4;
-const AI_CANDIDATES = 4;           // keep under Workers AI vision rate limit (~5 RPM)
-const AI_CALL_DELAY_MS = 13000;    // 13s between AI calls — 5 RPM limit = 12s minimum
-const MIN_ACTION_GAP = 2;
+const MAX_ACTIONS = 6;
+const AI_CANDIDATES = 4;
+const AI_CALL_DELAY_MS = 13000;
+const MIN_ACTION_GAP = 2.0;
 const DIFF_SIZE = 64;
-const MOTION_THRESHOLD = 0.08;
+const DEFAULT_SENSITIVITY = 0.45;
 
 interface Props {
   session: Session;
   videoFile: File;
-  onComplete: (frames: ExtractedFrame[]) => void;
+  onComplete: (frames: ExtractedFrame[], focusX?: number) => void;
 }
 
-type Phase = 'idle' | 'extracting' | 'detecting' | 'analyzing' | 'done' | 'error';
+type Phase = 'idle' | 'extracting' | 'ml-running' | 'done' | 'error';
+
+const DEFAULT_OVERLAY: OverlayElement = { type: 'none', text: '', position: 'top-right', visible: false };
+
+/**
+ * Smart frame selection: cap + gap + temporal diversity.
+ * Divides video into 3 segments and ensures picks from each segment.
+ * Returns the set of frame indices to select.
+ */
+function selectTopActions(
+  allFrames: { index: number; timestamp: number }[],
+  scores: ScoredFrame[],
+  threshold: number,
+  maxActions: number,
+  minGap: number,
+): Set<number> {
+  const candidates = scores
+    .filter(s => s.cv_confidence >= threshold)
+    .sort((a, b) => b.cv_confidence - a.cv_confidence);
+  if (candidates.length === 0) return new Set();
+
+  const maxTs = Math.max(...allFrames.map(f => f.timestamp), 1);
+  const segSize = maxTs / 3;
+
+  // Segment candidates into thirds of the video
+  const segments = [
+    candidates.filter(s => s.timestamp < segSize),
+    candidates.filter(s => s.timestamp >= segSize && s.timestamp < segSize * 2),
+    candidates.filter(s => s.timestamp >= segSize * 2),
+  ];
+
+  // Pick best from each non-empty segment first (temporal diversity)
+  const selected: ScoredFrame[] = [];
+  for (const seg of segments) {
+    if (seg.length === 0 || selected.length >= maxActions) continue;
+    selected.push(seg[0]);
+  }
+
+  // Fill remaining slots from all candidates with gap enforcement
+  for (const c of candidates) {
+    if (selected.length >= maxActions) break;
+    if (selected.some(s => s.index === c.index)) continue;
+    const tooClose = selected.some(s => Math.abs(s.timestamp - c.timestamp) < minGap);
+    if (!tooClose) selected.push(c);
+  }
+
+  return new Set(selected.map(s => s.index));
+}
 
 function computeMotionScore(
   ctx: CanvasRenderingContext2D,
@@ -36,47 +83,6 @@ function computeMotionScore(
   return { score: total / (DIFF_SIZE * DIFF_SIZE * 255), pixelData: data };
 }
 
-function selectHighMotionFrames(frames: ExtractedFrame[], maxCount: number): ExtractedFrame[] {
-  if (frames.length <= maxCount) return frames;
-  const segSize = frames.length / maxCount;
-  const selected: ExtractedFrame[] = [];
-  for (let i = 0; i < maxCount; i++) {
-    const start = Math.floor(i * segSize);
-    const end = Math.min(Math.floor((i + 1) * segSize), frames.length);
-    const seg = frames.slice(start, end);
-    const best = seg.reduce((a, b) => (a.motionScore ?? 0) >= (b.motionScore ?? 0) ? a : b);
-    selected.push(best);
-  }
-  return selected;
-}
-
-function selectBestActions(frames: ExtractedFrame[], maxCount: number): ExtractedFrame[] {
-  const actions = frames.filter(
-    f => f.analysisStatus === 'done' && f.analysis?.isAction && (f.analysis?.importance ?? 0) >= 6,
-  );
-  actions.sort((a, b) => (b.analysis?.importance ?? 0) - (a.analysis?.importance ?? 0));
-  const selected: ExtractedFrame[] = [];
-  for (const f of actions) {
-    if (selected.length >= maxCount) break;
-    const tooClose = selected.some(s => Math.abs(s.timestamp - f.timestamp) < MIN_ACTION_GAP);
-    if (!tooClose) selected.push(f);
-  }
-  if (selected.length < maxCount) {
-    const used = new Set(selected.map(f => f.index));
-    const byMotion = frames
-      .filter(f => !used.has(f.index))
-      .sort((a, b) => (b.motionScore ?? 0) - (a.motionScore ?? 0));
-    for (const f of byMotion) {
-      if (selected.length >= maxCount) break;
-      const tooClose = selected.some(s => Math.abs(s.timestamp - f.timestamp) < MIN_ACTION_GAP);
-      if (!tooClose) selected.push(f);
-    }
-  }
-  return selected;
-}
-
-const DEFAULT_OVERLAY: OverlayElement = { type: 'none', text: '', position: 'top-right', visible: false };
-
 export default function FrameExtractor({ session, videoFile, onComplete }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [frames, setFrames] = useState<ExtractedFrame[]>([]);
@@ -84,71 +90,129 @@ export default function FrameExtractor({ session, videoFile, onComplete }: Props
   const [statusMsg, setStatusMsg] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [inspected, setInspected] = useState<ExtractedFrame | null>(null);
-  const [useServerCV, setUseServerCV] = useState(false);
-  const [runAI, setRunAI] = useState(true);
   const [intervalSec, setIntervalSec] = useState(1.0);
+  const [runAI, setRunAI] = useState(false);
   const [neurons, setNeurons] = useState<{ dailyTotal: number; dailyLimit: number } | null>(null);
+  const [aiStatus, setAiStatus] = useState<'idle' | 'running' | 'done'>('idle');
+
+  // ML state
+  const [mlStatus, setMlStatus] = useState<'idle' | 'uploading' | 'detecting' | 'done' | 'error'>('idle');
+  const [mlScores, setMlScores] = useState<ScoredFrame[] | null>(null);
+  const [mlClusters, setMlClusters] = useState<ActionCluster[] | null>(null);
+  const [sensitivity, setSensitivity] = useState(DEFAULT_SENSITIVITY);
+  const [mlError, setMlError] = useState<string | null>(null);
+  const [mlFocusX, setMlFocusX] = useState<number | undefined>(undefined);
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const diffCanvasRef = useRef<HTMLCanvasElement>(null);
+  const framesRef = useRef<ExtractedFrame[]>([]);
 
   const maxScore = frames.reduce((m, f) => Math.max(m, f.motionScore ?? 0), 0.001);
 
-  async function startServerCV() {
-    setPhase('analyzing');
-    setProgress(10);
-    setStatusMsg('Sending video to server for CV + AI analysis…');
-    try {
-      const result: ProcessResponse = await processVideo(session.id, MAX_ACTIONS, intervalSec);
-      const mapped: ExtractedFrame[] = result.candidates.map((c) => {
-        const analysis: FrameAnalysis = {
-          frameIndex: c.index,
-          timestamp: c.timestamp,
+  // Re-apply action markers when sensitivity changes — uses smart selection with cap + gap + temporal diversity
+  useEffect(() => {
+    if (!mlScores || framesRef.current.length === 0) return;
+    const pickSet = selectTopActions(framesRef.current, mlScores, sensitivity, MAX_ACTIONS, MIN_ACTION_GAP);
+    const updated = framesRef.current.map(f => {
+      const mlFrame = mlScores.find(s => s.index === f.index);
+      const isAction = pickSet.has(f.index);
+      return {
+        ...f,
+        isSelected: isAction,
+        motionScore: mlFrame ? mlFrame.motion_score : f.motionScore,
+        analysis: isAction && mlFrame ? {
+          frameIndex: f.index,
+          timestamp: f.timestamp,
           thumbnailKey: '',
-          sceneType: 'gameplay',
-          description: `motion=${c.motion_score.toFixed(2)}, cv_conf=${c.cv_confidence.toFixed(2)}`,
-          mood: (c.mood ?? 'intense') as FrameAnalysis['mood'],
-          importance: c.importance,
-          isAction: c.isAction,
-          actionType: c.actionType,
-          actionLabel: c.actionLabel,
-          cta: c.cta,
+          sceneType: 'action' as const,
+          description: `CV confidence: ${(mlFrame.cv_confidence * 100).toFixed(0)}%`,
+          mood: 'intense' as const,
+          importance: Math.round(mlFrame.cv_confidence * 10),
+          isAction: true,
+          actionType: mlFrame.near_scene_boundary ? 'scene_change' : 'high_motion',
+          actionLabel: mlFrame.scene_type !== 'none' ? mlFrame.scene_type : 'action',
+          cta: { text: 'Play Now', position: { x: 50, y: 80 }, style: 'primary' as const, size: 'medium' as const, visible: true, action: 'link' as const },
           overlay: DEFAULT_OVERLAY,
-          animationSuggestion: c.animationSuggestion as AnimationType,
-        };
+          animationSuggestion: 'fade-in' as AnimationType,
+        } : undefined,
+        analysisStatus: 'done' as const,
+      };
+    });
+    setFrames(updated);
+  }, [sensitivity, mlScores]);
+
+  // Background ML pipeline: upload → detect
+  const runMLPipeline = useCallback(async () => {
+    setMlStatus('uploading');
+    setMlError(null);
+    try {
+      // Upload video to R2
+      const uploadResult = await uploadVideo(videoFile);
+      setMlStatus('detecting');
+      // Call ML action detection
+      const result: DetectActionsResponse = await detectActions(
+        uploadResult.sessionId,
+        intervalSec,
+        sensitivity,
+      );
+      setMlScores(result.allScores);
+      setMlClusters(result.actionClusters);
+      setMlFocusX(result.focusX);
+      setMlStatus('done');
+
+      // Merge ML results onto existing frames with smart selection (cap + gap + temporal diversity)
+      const currentFrames = framesRef.current;
+
+      // First, map ML scores to browser frame indices by closest timestamp
+      const mappedScores: ScoredFrame[] = result.allScores.map(s => {
+        const closest = currentFrames.reduce((best, f) =>
+          Math.abs(f.timestamp - s.timestamp) < Math.abs(best.timestamp - s.timestamp) ? f : best,
+          currentFrames[0],
+        );
+        return { ...s, index: closest.index, timestamp: closest.timestamp };
+      }).filter((s, i, arr) => {
+        // Deduplicate: keep only the best score per browser frame index
+        const bestForIdx = arr.filter(x => x.index === s.index).sort((a, b) => b.cv_confidence - a.cv_confidence)[0];
+        return s === bestForIdx;
+      });
+
+      const pickSet = selectTopActions(currentFrames, mappedScores, sensitivity, MAX_ACTIONS, MIN_ACTION_GAP);
+
+      const updated = currentFrames.map(f => {
+        const mlFrame = mappedScores.find(s => s.index === f.index);
+        const isAction = pickSet.has(f.index);
         return {
-          index: c.index,
-          timestamp: c.timestamp,
-          blob: new Blob(),
-          base64: '',
-          thumbnailUrl: '',
-          analysis,
+          ...f,
+          motionScore: mlFrame ? mlFrame.motion_score : f.motionScore,
+          isSelected: isAction,
+          analysis: isAction && mlFrame ? {
+            frameIndex: f.index,
+            timestamp: f.timestamp,
+            thumbnailKey: '',
+            sceneType: 'action' as const,
+            description: `CV confidence: ${(mlFrame.cv_confidence * 100).toFixed(0)}%`,
+            mood: 'intense' as const,
+            importance: Math.round(mlFrame.cv_confidence * 10),
+            isAction: true,
+            actionType: mlFrame.near_scene_boundary ? 'scene_change' : 'high_motion',
+            actionLabel: mlFrame.scene_type !== 'none' ? mlFrame.scene_type : 'action',
+            cta: { text: 'Play Now', position: { x: 50, y: 80 }, style: 'primary' as const, size: 'medium' as const, visible: true, action: 'link' as const },
+            overlay: DEFAULT_OVERLAY,
+            animationSuggestion: 'fade-in' as AnimationType,
+          } : undefined,
           analysisStatus: 'done' as const,
-          refinedTimestamp: Math.max(0, c.timestamp - 2.5),
-          isSelected: result.timeline.some(t => t.frameIndex === c.index),
-          motionScore: c.motion_score,
         };
       });
-      setFrames(mapped);
-      setProgress(100);
-      setPhase('done');
-      onComplete(mapped);
+      framesRef.current = updated;
+      setFrames(updated);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Server CV failed';
-      if (msg.includes('503') || msg.includes('CV_PIPELINE_UNREACHABLE')) {
-        // Container beta not enabled — auto-fall back to client-side
-        setUseServerCV(false);
-        setPhase('idle');
-        setStatusMsg('');
-        setError('Server-side CV is not available yet (requires Containers beta). Switched to client-side analysis.');
-        setPhase('error');
-      } else {
-        setError(msg);
-        setPhase('error');
-      }
+      const msg = err instanceof Error ? err.message : 'ML detection failed';
+      setMlError(msg);
+      setMlStatus('error');
     }
-  }
+  }, [videoFile, intervalSec, sensitivity]);
 
-  async function startClientExtraction() {
+  async function startExtraction() {
     const video = document.createElement('video');
     video.src = URL.createObjectURL(videoFile);
     video.muted = true;
@@ -175,7 +239,7 @@ export default function FrameExtractor({ session, videoFile, onComplete }: Props
     let prevData: Uint8ClampedArray | null = null;
 
     for (let i = 0; i < timestamps.length; i++) {
-      setProgress(Math.round((i / timestamps.length) * 50));
+      setProgress(Math.round((i / timestamps.length) * 100));
       setStatusMsg(`Extracting frame ${i + 1} / ${timestamps.length}`);
       video.currentTime = timestamps[i];
       await new Promise<void>((resolve) => { video.onseeked = () => resolve(); });
@@ -195,101 +259,160 @@ export default function FrameExtractor({ session, videoFile, onComplete }: Props
       });
     }
     URL.revokeObjectURL(video.src);
+    framesRef.current = extracted;
     setFrames([...extracted]);
 
-    setPhase('detecting');
-    setStatusMsg('Selecting candidates…');
-    const allFrames = [...extracted];
+    // Browser extraction done — smart action frame selection using motion spikes
+    // Instead of raw motion threshold, detect sudden CHANGES (spikes) in motion
+    const scores = extracted.map(f => f.motionScore ?? 0);
+    const mean = scores.reduce((a, b) => a + b, 0) / (scores.length || 1);
+    const variance = scores.reduce((a, s) => a + (s - mean) ** 2, 0) / (scores.length || 1);
+    const stddev = Math.sqrt(variance);
+    // Dynamic threshold: frames must be above mean + 0.5*stddev (adapts to video)
+    const dynamicThreshold = Math.max(mean + 0.5 * stddev, 0.12);
 
-    if (runAI) {
-      const candidates = selectHighMotionFrames(extracted, AI_CANDIDATES);
-      setPhase('analyzing');
+    // Also compute motion acceleration (change between frames) to find spikes
+    const accel = scores.map((s, i) => i === 0 ? 0 : Math.max(0, s - scores[i - 1]));
+    const accelMean = accel.reduce((a, b) => a + b, 0) / (accel.length || 1);
+    const accelStd = Math.sqrt(accel.reduce((a, s) => a + (s - accelMean) ** 2, 0) / (accel.length || 1));
 
-      for (let i = 0; i < candidates.length; i++) {
-        const f = candidates[i];
-        setProgress(50 + Math.round((i / candidates.length) * 50));
-        setStatusMsg(`Analyzing frame ${i + 1} / ${candidates.length} with AI${i > 0 ? ' (pacing to avoid rate limit…)' : '…'}`);
-        if (i > 0) await new Promise(r => setTimeout(r, AI_CALL_DELAY_MS));
-        allFrames[f.index] = { ...f, analysisStatus: 'analyzing' };
-        setFrames([...allFrames]);
-        try {
-          const result = await analyzeFrame({
-            sessionId: session.id, frameIndex: f.index,
-            timestamp: f.timestamp, imageBase64: f.base64,
-          });
-          setNeurons(result.neurons);
-          allFrames[f.index] = { ...f, analysisStatus: 'done', analysis: result.analysis };
-        } catch {
-          allFrames[f.index] = { ...f, analysisStatus: 'error' };
-        }
-        setFrames([...allFrames]);
-      }
-    } else {
-      setProgress(90);
-      setStatusMsg('Skipping AI — selecting by motion score…');
+    // Score = weighted combo: 60% raw motion above threshold + 40% spike magnitude
+    const ranked = extracted.map((f, i) => {
+      const motionAbove = Math.max(0, (f.motionScore ?? 0) - dynamicThreshold);
+      const spikeScore = accel[i] > accelMean + accelStd ? accel[i] : 0;
+      return { frame: f, rank: motionAbove * 0.6 + spikeScore * 0.4 };
+    }).filter(r => r.rank > 0).sort((a, b) => b.rank - a.rank);
+
+    const initialPicks: ExtractedFrame[] = [];
+    for (const { frame } of ranked) {
+      if (initialPicks.length >= MAX_ACTIONS) break;
+      const tooClose = initialPicks.some(s => Math.abs(s.timestamp - frame.timestamp) < MIN_ACTION_GAP);
+      if (!tooClose) initialPicks.push(frame);
     }
-
-    setProgress(100);
-    setPhase('done');
-    const best = selectBestActions(allFrames, MAX_ACTIONS);
-    const final = allFrames.map(f => ({
+    const pickSet = new Set(initialPicks.map(f => f.index));
+    const withSelection = extracted.map(f => ({
       ...f,
-      isSelected: best.some(b => b.index === f.index),
+      isSelected: pickSet.has(f.index),
       refinedTimestamp: Math.max(0, f.timestamp - 2.5),
     }));
-    setFrames(final);
-    onComplete(final);
+    framesRef.current = withSelection;
+    setFrames(withSelection);
+    setProgress(100);
+    setPhase('ml-running');
+    setStatusMsg('Frames ready! Running ML detection in background…');
+
+    // Fire ML pipeline in background
+    runMLPipeline();
+
+    // If AI enabled, also run vision AI on top candidates
+    if (runAI) {
+      runAIAnalysis(withSelection);
+    }
+  }
+
+  async function runAIAnalysis(allFrames: ExtractedFrame[]) {
+    setAiStatus('running');
+    // Pick top motion frames for AI
+    const sorted = [...allFrames].sort((a, b) => (b.motionScore ?? 0) - (a.motionScore ?? 0));
+    const candidates: ExtractedFrame[] = [];
+    for (const f of sorted) {
+      if (candidates.length >= AI_CANDIDATES) break;
+      const tooClose = candidates.some(s => Math.abs(s.timestamp - f.timestamp) < MIN_ACTION_GAP);
+      if (!tooClose) candidates.push(f);
+    }
+
+    const updated = [...allFrames];
+    for (let i = 0; i < candidates.length; i++) {
+      const f = candidates[i];
+      setStatusMsg(`AI analyzing frame ${i + 1} / ${candidates.length}${i > 0 ? ' (pacing…)' : '…'}`);
+      if (i > 0) await new Promise(r => setTimeout(r, AI_CALL_DELAY_MS));
+      updated[f.index] = { ...updated[f.index], analysisStatus: 'analyzing' };
+      setFrames([...updated]);
+      try {
+        const result = await analyzeFrame({
+          sessionId: session.id, frameIndex: f.index,
+          timestamp: f.timestamp, imageBase64: f.base64,
+        });
+        setNeurons(result.neurons);
+        updated[f.index] = { ...updated[f.index], analysisStatus: 'done', analysis: result.analysis };
+      } catch {
+        updated[f.index] = { ...updated[f.index], analysisStatus: 'error' };
+      }
+      framesRef.current = [...updated];
+      setFrames([...updated]);
+    }
+    setAiStatus('done');
   }
 
   async function handleStart() {
     setError(null);
-    if (useServerCV) await startServerCV();
-    else await startClientExtraction();
+    try {
+      await startExtraction();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Extraction failed');
+      setPhase('error');
+    }
   }
 
-  const isRunning = ['extracting', 'detecting', 'analyzing'].includes(phase);
+  function toggleFrame(index: number) {
+    const updated = frames.map(f =>
+      f.index === index ? { ...f, isSelected: !f.isSelected } : f,
+    );
+    framesRef.current = updated;
+    setFrames(updated);
+  }
+
+  function handleContinue() {
+    const selected = frames.filter(f => f.isSelected).map(f => ({
+      ...f,
+      refinedTimestamp: Math.max(0, f.timestamp - 2.5),
+    }));
+    if (selected.length === 0) {
+      setError('Select at least one action frame to continue');
+      return;
+    }
+    onComplete(frames, mlFocusX);
+  }
+
+  const isExtracting = phase === 'extracting';
+  const selectedCount = frames.filter(f => f.isSelected).length;
+  const actionCount = mlScores ? mlScores.filter(s => s.cv_confidence >= sensitivity).length : 0;
 
   return (
     <div className="flex flex-col h-[calc(100vh-73px)]">
       <div className="flex-1 flex flex-col gap-4 p-6 overflow-auto">
         {phase === 'idle' && (
           <div className="max-w-xl mx-auto w-full">
-            <h2 className="text-xl font-semibold mb-4">Analysis settings</h2>
+            <h2 className="text-xl font-semibold mb-4">Action Detection Settings</h2>
             <div className="bg-gray-900 rounded-xl p-5 flex flex-col gap-4">
-              <label className="flex items-center justify-between cursor-pointer">
+              <div className="flex items-center justify-between cursor-pointer" onClick={() => setRunAI(v => !v)}>
                 <div>
                   <p className="font-medium">AI frame analysis</p>
-                  <p className="text-sm text-gray-400">Vision AI picks the best action moments. ~{AI_CANDIDATES * (AI_CALL_DELAY_MS / 1000)}s extra.</p>
+                  <p className="text-sm text-gray-400">Vision AI picks the best action moments. ~{AI_CANDIDATES * (AI_CALL_DELAY_MS / 1000)}s extra. Uses neurons.</p>
                 </div>
-                <div onClick={() => setRunAI(v => !v)}
-                  className={`relative w-11 h-6 rounded-full transition-colors cursor-pointer ${runAI ? 'bg-indigo-600' : 'bg-gray-600'}`}>
+                <div className={`relative w-11 h-6 rounded-full transition-colors ${runAI ? 'bg-indigo-600' : 'bg-gray-600'}`}>
                   <div className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${runAI ? 'translate-x-5' : ''}`} />
                 </div>
-              </label>
-              <label className="flex items-center justify-between cursor-pointer">
-                <div>
-                  <p className="font-medium">Enhanced server-side analysis</p>
-                  <p className="text-sm text-gray-400">Uses OpenCV + FFmpeg + AI. More accurate.</p>
-                </div>
-                <input type="checkbox" checked={useServerCV}
-                  onChange={e => setUseServerCV(e.target.checked)}
-                  className="w-5 h-5 accent-indigo-500" />
-              </label>
+              </div>
               <div>
                 <label className="text-sm text-gray-400 block mb-1">Frame interval (seconds)</label>
                 <input type="number" min={0.5} max={5} step={0.5} value={intervalSec}
                   onChange={e => setIntervalSec(parseFloat(e.target.value))}
                   className="w-24 bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm" />
               </div>
+              <p className="text-sm text-gray-500">
+                Frames are extracted instantly in your browser. ML action detection (optical flow + scene detection) runs in background — no AI neurons.
+                {runAI ? ' AI vision analysis will also run on top candidates.' : ''}
+              </p>
               <button onClick={handleStart}
                 className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 rounded-lg transition-colors">
-                Start analysis
+                Start detection
               </button>
             </div>
           </div>
         )}
 
-        {isRunning && (
+        {isExtracting && (
           <div className="max-w-xl mx-auto w-full">
             <div className="bg-gray-900 rounded-xl p-6">
               <div className="flex items-center gap-3 mb-4">
@@ -307,52 +430,129 @@ export default function FrameExtractor({ session, videoFile, onComplete }: Props
         {phase === 'error' && error && (
           <div className="max-w-xl mx-auto w-full bg-red-950 border border-red-800 rounded-xl p-5">
             <p className="text-red-300 mb-3">{error}</p>
-            <button onClick={() => setPhase('idle')} className="text-sm text-red-400 underline">Try again</button>
+            <button onClick={() => { setPhase('idle'); setError(null); }} className="text-sm text-red-400 underline">Try again</button>
           </div>
         )}
 
+        {/* Frame grid — visible as soon as extraction starts producing frames */}
         {frames.length > 0 && (
           <>
+            {/* ML status banner */}
+            {(phase === 'ml-running' || phase === 'done') && (
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div className="flex items-center gap-2">
+                  {mlStatus === 'uploading' && (
+                    <>
+                      <div className="w-4 h-4 border-2 border-yellow-500 border-t-transparent rounded-full animate-spin" />
+                      <span className="text-sm text-yellow-400">Uploading video for ML analysis…</span>
+                    </>
+                  )}
+                  {mlStatus === 'detecting' && (
+                    <>
+                      <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                      <span className="text-sm text-blue-400">Running ML detection (optical flow + scene detection)…</span>
+                    </>
+                  )}
+                  {mlStatus === 'done' && (
+                    <span className="text-sm text-green-400">ML detection complete — {actionCount} action frames found</span>
+                  )}
+                  {mlStatus === 'error' && (
+                    <span className="text-sm text-red-400">ML detection failed: {mlError}. Using browser motion scores.</span>
+                  )}
+                  {mlStatus === 'idle' && (
+                    <span className="text-sm text-gray-400">Browser motion detection active</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Sensitivity slider (only when ML scores available) */}
+            {mlScores && (
+              <div className="bg-gray-900 rounded-lg p-4 flex items-center gap-4">
+                <label className="text-sm text-gray-400 whitespace-nowrap">Sensitivity</label>
+                <input
+                  type="range" min={0.1} max={0.8} step={0.05}
+                  value={sensitivity}
+                  onChange={e => setSensitivity(parseFloat(e.target.value))}
+                  className="flex-1 accent-indigo-500"
+                />
+                <span className="text-sm text-gray-300 w-12 text-right">{(sensitivity * 100).toFixed(0)}%</span>
+                <span className="text-xs text-gray-500">{actionCount} actions</span>
+              </div>
+            )}
+
+            {/* AI status banner */}
+            {aiStatus === 'running' && (
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm text-purple-400">{statusMsg}</span>
+              </div>
+            )}
+
             <div className="flex items-center justify-between">
               <h3 className="font-medium text-gray-300">
-                {frames.length} frames &middot; {frames.filter(f => f.isSelected).length} selected
+                {frames.length} frames &middot; {selectedCount} selected
+                {neurons && (
+                  <span className={`ml-3 text-xs px-2 py-0.5 rounded ${neurons.dailyTotal >= 4000 ? 'bg-yellow-900 text-yellow-300' : 'bg-gray-800 text-gray-400'}`}>
+                    {neurons.dailyTotal} / {neurons.dailyLimit} neurons
+                  </span>
+                )}
               </h3>
-              {neurons && (
-                <span className={`text-xs px-2 py-1 rounded ${neurons.dailyTotal >= 8000 ? 'bg-yellow-900 text-yellow-300' : 'bg-gray-800 text-gray-400'}`}>
-                  {neurons.dailyTotal} / {neurons.dailyLimit} neurons
-                </span>
+              {selectedCount > 0 && (phase === 'ml-running' || phase === 'done') && (
+                <button onClick={handleContinue}
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-5 py-2 rounded-lg transition-colors text-sm">
+                  Continue with {selectedCount} frames &rarr;
+                </button>
               )}
             </div>
+
             <div className="grid grid-cols-5 sm:grid-cols-8 lg:grid-cols-10 gap-2">
-              {frames.map(f => (
-                <div key={f.index}
-                  className={`relative cursor-pointer rounded overflow-hidden border-2 transition-all
-                    ${f.isSelected ? 'border-indigo-400' : 'border-transparent hover:border-gray-600'}`}
-                  onClick={() => setInspected(f)}>
-                  {f.thumbnailUrl ? (
-                    <img src={f.thumbnailUrl} alt={`Frame ${f.index}`} className="w-full aspect-video object-cover" />
-                  ) : (
-                    <div className="w-full aspect-video bg-gray-800 flex items-center justify-center text-xs text-gray-500">
-                      {f.timestamp.toFixed(1)}s
+              {frames.map(f => {
+                const mlFrame = mlScores?.find(s => s.index === f.index);
+                const cvConf = mlFrame?.cv_confidence;
+                return (
+                  <div key={f.index}
+                    className={`relative cursor-pointer rounded overflow-hidden border-2 transition-all
+                      ${f.isSelected ? 'border-green-400 ring-1 ring-green-400/30' : mlScores ? 'border-transparent opacity-50 hover:opacity-80' : 'border-transparent hover:border-gray-600'}`}
+                    onClick={() => toggleFrame(f.index)}>
+                    {f.thumbnailUrl ? (
+                      <img src={f.thumbnailUrl} alt={`Frame ${f.index}`} className="w-full aspect-video object-cover" />
+                    ) : (
+                      <div className="w-full aspect-video bg-gray-800 flex items-center justify-center text-xs text-gray-500">
+                        {f.timestamp.toFixed(1)}s
+                      </div>
+                    )}
+                    {/* Motion bar */}
+                    <div className="absolute bottom-0 left-0 right-0 h-1">
+                      <div className={`h-full ${(f.motionScore ?? 0) >= 0.08 ? 'bg-orange-500' : 'bg-gray-700'}`}
+                        style={{ width: `${((f.motionScore ?? 0) / maxScore) * 100}%` }} />
                     </div>
-                  )}
-                  <div className="absolute bottom-0 left-0 right-0 h-1">
-                    <div className={`h-full ${(f.motionScore ?? 0) >= MOTION_THRESHOLD ? 'bg-orange-500' : 'bg-gray-700'}`}
-                      style={{ width: `${((f.motionScore ?? 0) / maxScore) * 100}%` }} />
+                    {/* AI analyzing spinner */}
+                    {f.analysisStatus === 'analyzing' && (
+                      <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
+                        <div className="w-4 h-4 border border-purple-400 border-t-transparent rounded-full animate-spin" />
+                      </div>
+                    )}
+                    {/* AI action dot */}
+                    {f.analysis?.isAction && <div className="absolute top-0.5 right-0.5 w-2.5 h-2.5 bg-purple-400 rounded-full border border-purple-600" />}
+                    {/* CV confidence badge */}
+                    {cvConf !== undefined && cvConf >= sensitivity && !f.analysis?.isAction && (
+                      <div className="absolute top-0.5 right-0.5 text-[8px] bg-green-600 text-white rounded px-1 font-bold">
+                        {(cvConf * 100).toFixed(0)}%
+                      </div>
+                    )}
+                    {/* Selected checkmark */}
+                    {f.isSelected && (
+                      <div className="absolute top-0.5 left-0.5 text-[9px] bg-indigo-600 rounded px-0.5">&#x2713;</div>
+                    )}
                   </div>
-                  {f.analysisStatus === 'analyzing' && (
-                    <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-                      <div className="w-4 h-4 border border-indigo-400 border-t-transparent rounded-full animate-spin" />
-                    </div>
-                  )}
-                  {f.analysis?.isAction && <div className="absolute top-0.5 right-0.5 w-2 h-2 bg-green-400 rounded-full" />}
-                  {f.isSelected && <div className="absolute top-0.5 left-0.5 text-[9px] bg-indigo-600 rounded px-0.5">&#x2713;</div>}
-                </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )}
 
+        {/* Frame inspector modal */}
         {inspected && (
           <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-6" onClick={() => setInspected(null)}>
             <div className="bg-gray-900 rounded-2xl max-w-md w-full p-5" onClick={e => e.stopPropagation()}>
@@ -361,17 +561,25 @@ export default function FrameExtractor({ session, videoFile, onComplete }: Props
                 <button onClick={() => setInspected(null)} className="text-gray-500 hover:text-white">&#x2715;</button>
               </div>
               {inspected.thumbnailUrl && <img src={inspected.thumbnailUrl} alt="frame" className="w-full rounded-lg mb-3" />}
-              {inspected.analysis ? (
-                <div className="text-sm space-y-1 text-gray-300">
-                  <p><span className="text-gray-500">Action:</span> {inspected.analysis.isAction ? 'yes' : 'no'} ({inspected.analysis.actionType})</p>
-                  <p><span className="text-gray-500">Importance:</span> {inspected.analysis.importance}/10</p>
-                  <p><span className="text-gray-500">Label:</span> {inspected.analysis.actionLabel || '—'}</p>
-                  <p><span className="text-gray-500">Motion:</span> {((inspected.motionScore ?? 0) * 100).toFixed(1)}%</p>
-                  {inspected.analysis.description && <p className="text-gray-400 text-xs mt-2">{inspected.analysis.description}</p>}
-                </div>
-              ) : (
-                <p className="text-gray-500 text-sm">Not analyzed</p>
-              )}
+              {(() => {
+                const mlFrame = mlScores?.find(s => s.index === inspected.index);
+                return mlFrame ? (
+                  <div className="text-sm space-y-1 text-gray-300">
+                    <p><span className="text-gray-500">Combined Score:</span> {(mlFrame.cv_confidence * 100).toFixed(1)}%</p>
+                    <p><span className="text-gray-500">Visual Score:</span> <span className={mlFrame.clip_score >= 0.6 ? 'text-green-400' : mlFrame.clip_score >= 0.4 ? 'text-yellow-400' : 'text-red-400'}>{(mlFrame.clip_score * 100).toFixed(1)}%</span></p>
+                    <p><span className="text-gray-500">Motion:</span> {(mlFrame.motion_score * 100).toFixed(1)}%</p>
+                    <p><span className="text-gray-500">Scene Proximity:</span> {(mlFrame.scene_proximity_score * 100).toFixed(1)}%</p>
+                    <p><span className="text-gray-500">Motion Spike:</span> {(mlFrame.motion_spike_score * 100).toFixed(1)}%</p>
+                    <p><span className="text-gray-500">Scene Boundary:</span> {mlFrame.near_scene_boundary ? `yes (${mlFrame.scene_type})` : 'no'}</p>
+                    <p><span className="text-gray-500">Is Action:</span> {mlFrame.cv_confidence >= sensitivity ? 'yes' : 'no'}</p>
+                  </div>
+                ) : (
+                  <div className="text-sm space-y-1 text-gray-300">
+                    <p><span className="text-gray-500">Motion:</span> {((inspected.motionScore ?? 0) * 100).toFixed(1)}%</p>
+                    <p className="text-gray-500 text-xs">ML scores not yet available</p>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}

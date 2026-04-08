@@ -125,6 +125,7 @@ export interface CreativeConfig {
   backgroundColor: string;
   clickThroughUrl: string;
   timeline: TimelineEvent[];
+  focusX?: number;           // horizontal focus point (0-100%) from ML motion centroid
 }
 
 export interface TimelineEvent {
@@ -136,6 +137,49 @@ export interface TimelineEvent {
   overlay: OverlayElement;
   animation: AnimationType;
   pauseVideo: boolean;
+}
+
+// --- ML Action Detection (no AI) ---
+export interface CvScoredFrame {
+  index: number;
+  timestamp: number;
+  motion_score: number;
+  scene_proximity_score: number;
+  motion_spike_score: number;
+  temporal_score: number;
+  cv_confidence: number;
+  clip_score: number;
+  near_scene_boundary: boolean;
+  scene_type: string;
+  is_action: boolean;
+}
+
+export interface CvActionCluster {
+  peak_index: number;
+  peak_timestamp: number;
+  peak_cv_confidence: number;
+  start_timestamp: number;
+  end_timestamp: number;
+  frame_count: number;
+  jpeg_base64: string;
+}
+
+export interface DetectActionsRequest {
+  sessionId: string;
+  interval?: number;
+  actionThreshold?: number;
+  clusterGapSeconds?: number;
+}
+
+export interface DetectActionsResponse {
+  sessionId: string;
+  totalFramesExtracted: number;
+  sceneBoundaries: number;
+  actionCount: number;
+  actionClusters: CvActionCluster[];
+  allScores: CvScoredFrame[];
+  focusX: number;           // horizontal center of action (0-100%) for smart crop
+  processingTimeMs: number;
 }
 
 // --- App Error ---

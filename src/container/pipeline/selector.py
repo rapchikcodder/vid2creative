@@ -1,47 +1,32 @@
 """
 Multi-pass frame selector.
 
-Combines optical flow, scene detection, and temporal position to score
-every extracted frame, then picks the top N with gap enforcement.
+Combines optical flow, scene detection, visual excitement analysis, and temporal
+position to score every extracted frame, then picks the top N with gap enforcement.
 
 Scoring formula per frame:
     cv_confidence = (
-        0.35 * motion_score           # optical flow magnitude + variance
-      + 0.25 * scene_proximity_score  # closeness to a scene boundary
-      + 0.25 * motion_spike_score     # is this a local peak in motion?
-      + 0.15 * temporal_score         # prefer mid-video over start/end
+        0.25 * motion_score           # optical flow magnitude + variance
+      + 0.15 * scene_proximity_score  # closeness to a scene boundary
+      + 0.10 * motion_spike_score     # is this a local peak in motion?
+      + 0.10 * temporal_score         # prefer mid-video over start/end
+      + 0.40 * visual_score           # edge density + saturation + entropy + brightness
     )
-
-Replaces from v1.2.0:
-    - selectHighMotionFrames() (segment-based)
-    - selectBestActions() (AI-gated with fallback)
-    - The motion_score fallback logic
 """
-from .types import ExtractedFrame, SceneBoundary, CandidateFrame
+from .types import ExtractedFrame, SceneBoundary, CandidateFrame, ScoredFrame, ActionCluster
+from .clip_scorer import score_frames_clip
 
 
-def select_best_candidates(
+def _score_all_frames(
     frames: list[ExtractedFrame],
     scene_boundaries: list[SceneBoundary],
-    max_candidates: int = 5,
-    min_gap_seconds: float = 2.0,
     scene_proximity_window: float = 2.0,
-) -> list[CandidateFrame]:
-    """
-    Score all frames and select top candidates for AI analysis.
-
-    Args:
-        frames: Frames with motion_score populated (from motion.py)
-        scene_boundaries: Scene cuts (from scenes.py)
-        max_candidates: How many frames to return
-        min_gap_seconds: Minimum seconds between selected candidates
-        scene_proximity_window: Seconds around a scene cut that counts as "near"
-
-    Returns:
-        Top-N candidates sorted by timestamp
+) -> None:
+    """Run passes 1-4: scene proximity, spike detection, temporal, combined CV confidence.
+    Mutates frames in place.
     """
     if not frames:
-        return []
+        return
 
     duration = frames[-1].timestamp if frames else 0.0
     boundary_times = [b.timestamp for b in scene_boundaries]
@@ -56,14 +41,12 @@ def select_best_candidates(
         if min_dist <= scene_proximity_window:
             frame.scene_proximity_score = round(1.0 - (min_dist / scene_proximity_window), 4)
             frame.near_scene_boundary = True
-            # Find the boundary this frame is closest to
             closest_b = min(scene_boundaries, key=lambda b: abs(b.timestamp - frame.timestamp))
             frame.scene_type = closest_b.scene_type if min_dist < 0.5 else 'near_cut'
         else:
             frame.scene_proximity_score = 0.0
 
     # === Pass 2: Local motion spike detection ===
-    # A frame is a spike if it's ≥ 90% of its local neighborhood maximum
     SPIKE_WINDOW = 2  # frames each side
     for i, frame in enumerate(frames):
         lo = max(0, i - SPIKE_WINDOW)
@@ -78,28 +61,43 @@ def select_best_candidates(
             frame.motion_spike_score = 0.5
 
     # === Pass 3: Temporal position score ===
-    # Slightly prefer the middle 60-80% of the video
+    # Neutral — all positions equal. Temporal diversity is enforced in the
+    # frontend selection logic (segment-based picking) instead of biasing scores.
     for frame in frames:
-        if duration <= 0:
-            frame.temporal_score = 0.5
-            continue
-        t = frame.timestamp / duration  # 0.0 to 1.0
-        if 0.15 <= t <= 0.85:
-            frame.temporal_score = 1.0
-        elif t < 0.15:
-            frame.temporal_score = round(t / 0.15, 4)          # ramp 0→1 over first 15%
-        else:
-            frame.temporal_score = round((1.0 - t) / 0.15, 4)  # ramp 1→0 over last 15%
+        frame.temporal_score = 0.5
 
-    # === Pass 4: Combined CV confidence ===
+    # === Pass 4: Visual excitement scoring (edge density, saturation, entropy) ===
+    clip_scores = score_frames_clip(frames)
+    for frame, cs in zip(frames, clip_scores):
+        frame.clip_score = cs
+
+    # === Pass 5: Combined CV confidence ===
+    # Motion (with direction entropy) is the strongest signal at 40%.
+    # Visual (with SSIM structural change) provides per-frame quality at 30%.
+    # Scene proximity and spike detection are supporting signals.
     for frame in frames:
         frame.cv_confidence = round(
-            0.35 * frame.motion_score
-            + 0.25 * frame.scene_proximity_score
-            + 0.25 * frame.motion_spike_score
-            + 0.15 * frame.temporal_score,
+            0.40 * frame.motion_score
+            + 0.30 * frame.clip_score
+            + 0.15 * frame.scene_proximity_score
+            + 0.10 * frame.motion_spike_score
+            + 0.05 * frame.temporal_score,
             4,
         )
+
+
+def select_best_candidates(
+    frames: list[ExtractedFrame],
+    scene_boundaries: list[SceneBoundary],
+    max_candidates: int = 5,
+    min_gap_seconds: float = 2.0,
+    scene_proximity_window: float = 2.0,
+) -> list[CandidateFrame]:
+    """Score all frames and select top candidates for AI analysis."""
+    if not frames:
+        return []
+
+    _score_all_frames(frames, scene_boundaries, scene_proximity_window)
 
     # === Pass 5: Select top-N with gap enforcement ===
     sorted_frames = sorted(frames, key=lambda f: f.cv_confidence, reverse=True)
@@ -124,6 +122,77 @@ def select_best_candidates(
             cv_confidence=frame.cv_confidence,
         ))
 
-    # Return in chronological order for timeline building
     selected.sort(key=lambda c: c.timestamp)
     return selected
+
+
+def detect_all_actions(
+    frames: list[ExtractedFrame],
+    scene_boundaries: list[SceneBoundary],
+    action_threshold: float = 0.35,
+    cluster_gap_seconds: float = 1.5,
+    scene_proximity_window: float = 2.0,
+) -> tuple[list[ScoredFrame], list[ActionCluster]]:
+    """
+    Score all frames and classify as action/non-action.
+    Clusters adjacent action frames and picks peak per cluster.
+
+    Returns:
+        (all_scored_frames, action_clusters)
+    """
+    if not frames:
+        return [], []
+
+    _score_all_frames(frames, scene_boundaries, scene_proximity_window)
+
+    # Build scored frames list (lightweight, no image data)
+    all_scored: list[ScoredFrame] = []
+    for f in frames:
+        all_scored.append(ScoredFrame(
+            index=f.index,
+            timestamp=f.timestamp,
+            motion_score=f.motion_score,
+            scene_proximity_score=f.scene_proximity_score,
+            motion_spike_score=f.motion_spike_score,
+            temporal_score=f.temporal_score,
+            cv_confidence=f.cv_confidence,
+            clip_score=f.clip_score,
+            near_scene_boundary=f.near_scene_boundary,
+            scene_type=f.scene_type,
+            is_action=f.cv_confidence >= action_threshold,
+        ))
+
+    # Cluster adjacent action frames
+    action_frames = [(i, f) for i, f in enumerate(frames) if all_scored[i].is_action]
+    clusters: list[ActionCluster] = []
+
+    if not action_frames:
+        return all_scored, clusters
+
+    # Group into clusters where consecutive action frames are within cluster_gap
+    current_cluster: list[tuple[int, ExtractedFrame]] = [action_frames[0]]
+    for j in range(1, len(action_frames)):
+        _, prev_f = current_cluster[-1]
+        _, curr_f = action_frames[j]
+        if curr_f.timestamp - prev_f.timestamp <= cluster_gap_seconds:
+            current_cluster.append(action_frames[j])
+        else:
+            clusters.append(_build_cluster(current_cluster))
+            current_cluster = [action_frames[j]]
+    clusters.append(_build_cluster(current_cluster))
+
+    return all_scored, clusters
+
+
+def _build_cluster(group: list[tuple[int, ExtractedFrame]]) -> ActionCluster:
+    """Build an ActionCluster from a group of adjacent action frames."""
+    peak_idx, peak_frame = max(group, key=lambda x: x[1].cv_confidence)
+    return ActionCluster(
+        peak_index=peak_frame.index,
+        peak_timestamp=peak_frame.timestamp,
+        peak_cv_confidence=peak_frame.cv_confidence,
+        start_timestamp=group[0][1].timestamp,
+        end_timestamp=group[-1][1].timestamp,
+        frame_count=len(group),
+        jpeg_base64=peak_frame.jpeg_base64,
+    )

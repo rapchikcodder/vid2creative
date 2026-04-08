@@ -22,34 +22,30 @@ export default function VideoUploader({ onComplete }: Props) {
       return;
     }
     setError(null);
-    setUploading(true);
-    try {
-      const result = await uploadVideo(file);
-      const session: Session = {
-        id: result.sessionId,
-        createdAt: new Date().toISOString(),
-        videoKey: `videos/${result.sessionId}.mp4`,
-        videoUrl: result.videoUrl,
-        totalFrames: 0,
-        analyzedFrames: 0,
-        status: 'ready',
-        config: {
-          width: 360,
-          height: 640,
-          posterFrameIndex: 0,
-          autoplayAfterTap: true,
-          loopVideo: false,
-          muteByDefault: true,
-          backgroundColor: '#000000',
-          clickThroughUrl: '',
-          timeline: [],
-        },
-      };
-      onComplete(file, session);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed');
-      setUploading(false);
-    }
+    // Skip server upload — video stays local until export.
+    // Generate a local session ID instantly.
+    const localId = Math.random().toString(36).slice(2, 14);
+    const session: Session = {
+      id: localId,
+      createdAt: new Date().toISOString(),
+      videoKey: '',
+      videoUrl: '',
+      totalFrames: 0,
+      analyzedFrames: 0,
+      status: 'ready',
+      config: {
+        width: 360,
+        height: 640,
+        posterFrameIndex: 0,
+        autoplayAfterTap: true,
+        loopVideo: false,
+        muteByDefault: true,
+        backgroundColor: '#000000',
+        clickThroughUrl: '',
+        timeline: [],
+      },
+    };
+    onComplete(file, session);
   }
 
   function onDrop(e: React.DragEvent) {

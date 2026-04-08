@@ -1,4 +1,4 @@
-import type { Session, FrameAnalysis, CreativeConfig, ProcessResponse } from './types';
+import type { Session, FrameAnalysis, CreativeConfig, ProcessResponse, DetectActionsResponse } from './types';
 
 const API_BASE = '';
 
@@ -61,6 +61,21 @@ export async function updateSession(sessionId: string, data: Partial<Session>): 
     body: JSON.stringify(data),
   });
   if (!res.ok) throw new Error(`Update session failed: ${res.status}`);
+  return res.json();
+}
+
+export async function detectActions(
+  sessionId: string,
+  interval: number = 0.5,
+  actionThreshold: number = 0.35,
+  clusterGapSeconds: number = 1.5,
+): Promise<DetectActionsResponse> {
+  const res = await fetch(`${API_BASE}/api/detect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId, interval, actionThreshold, clusterGapSeconds }),
+  });
+  if (!res.ok) throw new Error(`Detect actions failed: ${res.status}`);
   return res.json();
 }
 

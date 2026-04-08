@@ -45,6 +45,9 @@ function buildTimelineCtaHtml(event: TimelineEvent, clickUrl: string): string {
 }
 
 export function generateCreativeHtml(config: CreativeConfig, videoUrl: string, posterFrameUrl: string): string {
+  // Smart crop: center on character using ML-detected focus point
+  const focusX = config.focusX ?? 50;
+
   // Build poster CTAs from timeline events at the poster frame
   const posterEvents = config.timeline.filter(e => e.frameIndex === config.posterFrameIndex);
   let posterCtas = '';
@@ -76,8 +79,8 @@ export function generateCreativeHtml(config: CreativeConfig, videoUrl: string, p
     *{margin:0;padding:0;box-sizing:border-box}
     body{background:#111;display:flex;justify-content:center;align-items:center;min-height:100vh}
     .creative{position:relative;width:${config.width}px;height:${config.height}px;overflow:hidden;background:${config.backgroundColor};cursor:pointer}
-    .creative video{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover}
-    .poster-overlay{position:absolute;top:0;left:0;width:100%;height:100%;z-index:10;background-size:cover;background-position:center;transition:opacity .5s ease}
+    .creative video{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;object-position:${focusX}% 50%}
+    .poster-overlay{position:absolute;top:0;left:0;width:100%;height:100%;z-index:10;background-size:cover;background-position:${focusX}% 50%;transition:opacity .5s ease}
     .poster-overlay.hidden{opacity:0;pointer-events:none}
     .cta-btn{position:absolute;transform:translate(-50%,-50%);border:none;border-radius:8px;cursor:pointer;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#fff;z-index:20;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;opacity:0}
     .cta-btn.poster-cta{opacity:1}
@@ -148,12 +151,14 @@ function doAction(el,e){
   else if(a==='mute_toggle'){v.muted=!v.muted;}
   if(el.dataset.pause==='true'&&paused){paused=false;v.play();}
 }
+p.querySelectorAll('a.cta-btn').forEach(function(a){
+  a.addEventListener('click',function(e){e.preventDefault();});
+});
 t.addEventListener('click',function(e){
   var btn=e.target.closest('[data-action]');
   if(btn)doAction(btn,e);
 });
 document.getElementById('creative').addEventListener('click',function(e){
-  if(e.target.closest('.cta-btn'))return;
   if(!r){
     e.preventDefault();r=true;p.classList.add('hidden');t.style.display='block';v.play();
     v.addEventListener('timeupdate',function(){
@@ -171,6 +176,12 @@ document.getElementById('creative').addEventListener('click',function(e){
         }
       });
     });
+  }else if(e.target.closest('.cta-btn')){
+    var cb=e.target.closest('.cta-btn');
+    var hr=cb.getAttribute('href');
+    if(!hr||hr==='')e.preventDefault();
+    if(paused){paused=false;v.play();}
+    return;
   }else if(paused){
     paused=false;v.play();
   }

@@ -48,7 +48,7 @@ export default function App() {
     setStep('extract');
   }
 
-  function handleAnalysisComplete(analyzedFrames: ExtractedFrame[]) {
+  function handleAnalysisComplete(analyzedFrames: ExtractedFrame[], focusX?: number) {
     setFrames(analyzedFrames);
 
     // Build initial timeline from selected frames (2.5s pre-offset)
@@ -70,6 +70,7 @@ export default function App() {
       timeline: events,
       posterFrameIndex: analyzedFrames[0]?.index ?? 0,
       videoUrl: session?.videoUrl ?? '',
+      focusX: focusX ?? prev.focusX,
     } as CreativeConfig));
 
     setStep('edit');
@@ -141,6 +142,7 @@ export default function App() {
         {step === 'export' && session && (
           <ExportPanel
             session={session}
+            videoFile={videoFile!}
             frames={frames}
             config={config}
             onConfigChange={handleConfigChange}

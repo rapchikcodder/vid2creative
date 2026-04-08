@@ -7,6 +7,7 @@ import analyzeRoute from './routes/analyze';
 import statusRoute from './routes/status';
 import exportRoute from './routes/export';
 import processRoute from './routes/process';
+import detectRoute from './routes/detect';
 
 // Python CV container — FastAPI + FFmpeg + OpenCV
 export class CvPipeline extends Container {
@@ -32,6 +33,7 @@ app.route('/api/analyze', analyzeRoute);   // kept for backward compat
 app.route('/api/status', statusRoute);
 app.route('/api/export', exportRoute);
 app.route('/api/process', processRoute);   // v2.0 full pipeline
+app.route('/api/detect', detectRoute);    // ML action detection (no AI)
 
 // Serve R2 files (frames, videos, exports)
 app.get('/api/files/:key{.+}', async (c) => {
