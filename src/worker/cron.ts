@@ -18,7 +18,7 @@ export async function handleScheduled(env: Env): Promise<void> {
  */
 async function warmContainer(env: Env): Promise<void> {
   try {
-    const id = env.CV_PIPELINE.idFromName('warmer');
+    const id = env.CV_PIPELINE.idFromName('cv-pipeline-singleton');
     const stub = env.CV_PIPELINE.get(id);
     const resp = await stub.fetch('http://container/health', {
       signal: AbortSignal.timeout(10_000),

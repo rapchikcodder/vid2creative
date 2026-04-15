@@ -1,5 +1,4 @@
 import React, { useState, useRef } from 'react';
-import { uploadVideo } from '../lib/api';
 import type { Session } from '../lib/types';
 
 interface Props {
@@ -8,17 +7,16 @@ interface Props {
 
 export default function VideoUploader({ onComplete }: Props) {
   const [dragging, setDragging] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  async function handleFile(file: File) {
+  function handleFile(file: File) {
     if (!file.type.startsWith('video/')) {
       setError('Please select a video file (MP4, WebM)');
       return;
     }
-    if (file.size > 200 * 1024 * 1024) {
-      setError('File too large (max 200 MB)');
+    if (file.size > 100 * 1024 * 1024) {
+      setError('File too large (max 100 MB)');
       return;
     }
     setError(null);
@@ -65,29 +63,20 @@ export default function VideoUploader({ onComplete }: Props) {
       <div className="w-full max-w-lg">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold mb-2">Upload your gameplay video</h1>
-          <p className="text-gray-400">MP4 or WebM, up to 200 MB. The AI will find the best action moments automatically.</p>
+          <p className="text-gray-400">MP4 or WebM, up to 100 MB. The AI will find the best action moments automatically.</p>
         </div>
 
         <div
           className={`border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all
             ${dragging ? 'border-indigo-400 bg-indigo-950/30' : 'border-gray-700 hover:border-gray-500 bg-gray-900/50'}`}
-          onClick={() => !uploading && inputRef.current?.click()}
+          onClick={() => inputRef.current?.click()}
           onDragOver={e => { e.preventDefault(); setDragging(true); }}
           onDragLeave={() => setDragging(false)}
           onDrop={onDrop}
         >
-          {uploading ? (
-            <div className="flex flex-col items-center gap-3">
-              <div className="w-10 h-10 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-              <p className="text-gray-300">Uploading…</p>
-            </div>
-          ) : (
-            <>
-              <div className="text-5xl mb-4">🎮</div>
-              <p className="text-lg font-medium mb-1">Drop video here</p>
-              <p className="text-gray-500 text-sm">or click to browse</p>
-            </>
-          )}
+          <div className="text-5xl mb-4">🎮</div>
+          <p className="text-lg font-medium mb-1">Drop video here</p>
+          <p className="text-gray-500 text-sm">or click to browse</p>
         </div>
 
         {error && (

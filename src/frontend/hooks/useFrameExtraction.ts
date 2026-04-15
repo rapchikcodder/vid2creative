@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import type { ExtractedFrame } from '../lib/types';
 
 const DIFF_SIZE = 64;
@@ -46,6 +46,7 @@ export function useFrameExtraction(): UseFrameExtractionReturn {
   const [statusMsg, setStatusMsg] = useState('');
   const [isExtracting, setIsExtracting] = useState(false);
   const framesRef = useRef<ExtractedFrame[]>([]);
+  const blobUrlsRef = useRef<Set<string>>(new Set());
 
   const startExtraction = useCallback(async (
     videoFile: File,
@@ -92,9 +93,11 @@ export function useFrameExtraction(): UseFrameExtractionReturn {
         reader.onload = () => resolve((reader.result as string).split(',')[1]);
         reader.readAsDataURL(blob);
       });
+      const thumbnailUrl = URL.createObjectURL(blob);
+      blobUrlsRef.current.add(thumbnailUrl);
       extracted.push({
         index: i, timestamp: timestamps[i], blob, base64,
-        thumbnailUrl: URL.createObjectURL(blob),
+        thumbnailUrl,
         analysisStatus: 'pending', motionScore: score,
       });
     }
@@ -137,6 +140,14 @@ export function useFrameExtraction(): UseFrameExtractionReturn {
     setStatusMsg('Frames ready! Running ML detection in background\u2026');
 
     return withSelection;
+  }, []);
+
+  // Revoke all blob URLs when the component using this hook unmounts
+  useEffect(() => {
+    return () => {
+      blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+      blobUrlsRef.current.clear();
+    };
   }, []);
 
   return { frames, framesRef, progress, statusMsg, isExtracting, setFrames, startExtraction };
