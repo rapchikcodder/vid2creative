@@ -58,12 +58,10 @@ export async function getFrameAnalysis(env: Env, sessionId: string, frameIndex: 
 }
 
 export async function getAllFrameAnalyses(env: Env, sessionId: string, totalFrames: number): Promise<FrameAnalysis[]> {
-  const analyses: FrameAnalysis[] = [];
-  for (let i = 0; i < totalFrames; i++) {
-    const a = await getFrameAnalysis(env, sessionId, i);
-    if (a) analyses.push(a);
-  }
-  return analyses;
+  const results = await Promise.all(
+    Array.from({ length: totalFrames }, (_, i) => getFrameAnalysis(env, sessionId, i))
+  );
+  return results.filter((a): a is FrameAnalysis => a !== null);
 }
 
 // --- R2 Helpers ---

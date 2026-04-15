@@ -1,11 +1,16 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import type { ExtractedFrame, CreativeConfig, TimelineEvent, CTAButton, AnimationType, ButtonStyle } from '../lib/types';
+import TemplateSelector from './TemplateSelector';
 
 interface Props {
   videoFile: File;
   frames: ExtractedFrame[];
   config: CreativeConfig;
   onConfigChange: (config: CreativeConfig) => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
   onBack: () => void;
   onNext: () => void;
 }
@@ -26,14 +31,16 @@ const CTA_SIZES: Record<string, React.CSSProperties> = {
   large:  { padding: '16px 36px', fontSize: '16px', borderRadius: '12px' },
 };
 
-export default function OverlayEditor({ videoFile, frames, config, onConfigChange, onBack, onNext }: Props) {
+export default function OverlayEditor({ videoFile, frames, config, onConfigChange, onUndo, onRedo, canUndo, canRedo, onBack, onNext }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const videoWrapRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [showTemplates, setShowTemplates] = useState(false);
   const videoUrl = useRef(URL.createObjectURL(videoFile));
 
   useEffect(() => () => { URL.revokeObjectURL(videoUrl.current); }, []);
@@ -98,6 +105,48 @@ export default function OverlayEditor({ videoFile, frames, config, onConfigChang
     updateEvent(id, { cta: { ...event.cta, ...patch } });
   }
 
+  // Keyboard shortcuts: ⌘Z undo, ⌘⇧Z redo, Space play/pause, ←/→ frame step
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) onRedo?.(); else onUndo?.();
+      }
+      if (e.key === ' ') {
+        e.preventDefault();
+        const v = videoRef.current;
+        if (v) { if (v.paused) { v.play(); setPlaying(true); } else { v.pause(); setPlaying(false); } }
+      }
+      if (e.key === 'ArrowLeft' && videoRef.current)
+        videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - 1 / 30);
+      if (e.key === 'ArrowRight' && videoRef.current)
+        videoRef.current.currentTime = Math.min(duration, videoRef.current.currentTime + 1 / 30);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onUndo, onRedo, duration]);
+
+  // Drag CTA position in video preview
+  function handleCtaDragStart(e: React.MouseEvent, eventId: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    const wrap = videoWrapRef.current;
+    if (!wrap) return;
+    function onMove(ev: MouseEvent) {
+      const rect = wrap!.getBoundingClientRect();
+      const x = Math.round(((ev.clientX - rect.left) / rect.width) * 100);
+      const y = Math.round(((ev.clientY - rect.top) / rect.height) * 100);
+      updateCta(eventId, { position: { x: Math.max(5, Math.min(95, x)), y: Math.max(5, Math.min(95, y)) } });
+    }
+    function onUp() {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }
+
   const fmt = (t: number) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`;
 
   // Always show selected event's button so edits are visible instantly
@@ -113,7 +162,7 @@ export default function OverlayEditor({ videoFile, frames, config, onConfigChang
       {/* Left panel: video + timeline */}
       <div className="flex-1 flex flex-col min-w-0 border-r border-gray-800">
         <div className="flex-1 flex items-center justify-center bg-gray-950 relative overflow-hidden">
-          <div className="relative" style={{ maxHeight: '60vh' }}>
+          <div ref={videoWrapRef} className="relative" style={{ maxHeight: '60vh' }}>
             <video
               ref={videoRef}
               src={videoUrl.current}
@@ -124,17 +173,20 @@ export default function OverlayEditor({ videoFile, frames, config, onConfigChang
             />
             {activeOverlays.map(ev => (
               <div key={ev.id}
-                className="absolute pointer-events-none"
-                style={{ left: `${ev.cta.position.x}%`, top: `${ev.cta.position.y}%`, transform: 'translate(-50%, -50%)' }}>
+                className="absolute"
+                style={{ left: `${ev.cta.position.x}%`, top: `${ev.cta.position.y}%`, transform: 'translate(-50%, -50%)',
+                  cursor: ev.id === selectedEventId ? 'move' : 'default', pointerEvents: ev.id === selectedEventId ? 'auto' : 'none' }}
+                onMouseDown={ev.id === selectedEventId ? (e) => handleCtaDragStart(e, ev.id) : undefined}>
                 <span style={{
                   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                   borderRadius: '8px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px',
                   color: '#fff', fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
                   outline: ev.id === selectedEventId ? '2px solid rgba(255,255,255,0.6)' : 'none',
-                  outlineOffset: '2px',
+                  outlineOffset: '2px', userSelect: 'none',
                   ...(CTA_STYLES[ev.cta.style] ?? CTA_STYLES.primary),
                   ...(CTA_SIZES[ev.cta.size] ?? CTA_SIZES.medium),
                 }}>
+                  {ev.id === selectedEventId && <span className="mr-1 text-xs opacity-60">✥</span>}
                   {ev.cta.text}
                 </span>
               </div>
@@ -160,7 +212,19 @@ export default function OverlayEditor({ videoFile, frames, config, onConfigChang
               className="ml-2 bg-green-700 hover:bg-green-600 text-white text-sm px-3 py-1.5 rounded-lg transition-colors">
               + Add Action Here
             </button>
+            <button onClick={() => setShowTemplates(s => !s)}
+              className={`text-sm px-3 py-1.5 rounded-lg transition-colors ${showTemplates ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}>
+              Templates {showTemplates ? '▴' : '▾'}
+            </button>
           </div>
+
+          {showTemplates && (
+            <TemplateSelector
+              config={config}
+              onApply={next => { onConfigChange(next); setShowTemplates(false); }}
+              onClear={() => { onConfigChange({ ...config, timeline: [] }); setShowTemplates(false); }}
+            />
+          )}
 
           <div className="relative h-8 bg-gray-800 rounded-lg overflow-hidden cursor-pointer"
             onClick={e => {
@@ -197,7 +261,15 @@ export default function OverlayEditor({ videoFile, frames, config, onConfigChang
       <div className="w-72 flex flex-col bg-gray-900 overflow-auto">
         <div className="p-4 border-b border-gray-800 flex items-center justify-between">
           <h3 className="font-semibold">Events ({config.timeline.length})</h3>
-          <div className="flex gap-2">
+          <div className="flex gap-1.5">
+            <button onClick={onUndo} disabled={!canUndo} title="Undo (⌘Z)"
+              className="w-8 h-8 flex items-center justify-center rounded transition-colors disabled:opacity-30 bg-gray-700 hover:bg-gray-600 text-sm">
+              ↩
+            </button>
+            <button onClick={onRedo} disabled={!canRedo} title="Redo (⌘⇧Z)"
+              className="w-8 h-8 flex items-center justify-center rounded transition-colors disabled:opacity-30 bg-gray-700 hover:bg-gray-600 text-sm">
+              ↪
+            </button>
             <button onClick={onBack}
               className="bg-gray-700 hover:bg-gray-600 text-white text-sm px-3 py-1.5 rounded-lg transition-colors">
               &#x2190; Back
@@ -248,6 +320,14 @@ export default function OverlayEditor({ videoFile, frames, config, onConfigChang
                       <input type="number" min={0.3} max={30} step={0.1} value={ev.duration}
                         onChange={e => updateEvent(ev.id, { duration: parseFloat(e.target.value) })}
                         className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-1">Position <span className="text-gray-600">(drag in preview)</span></label>
+                    <div className="flex gap-2 text-xs text-gray-300 font-mono bg-gray-800 rounded px-2 py-1.5 border border-gray-700">
+                      <span>x: {ev.cta.position.x}%</span>
+                      <span className="text-gray-600">·</span>
+                      <span>y: {ev.cta.position.y}%</span>
                     </div>
                   </div>
                   <div>

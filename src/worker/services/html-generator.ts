@@ -126,10 +126,10 @@ export function generateCreativeHtml(config: CreativeConfig, videoUrl: string, p
 </head>
 <body>
   <div class="creative" id="creative">
-    <video id="video" playsinline webkit-playsinline ${mutedAttr} ${loopAttr} preload="auto" poster="${escapeHtml(posterFrameUrl)}">
+    <video id="video" playsinline webkit-playsinline ${mutedAttr} ${loopAttr} preload="auto"${posterFrameUrl ? ` poster="${escapeHtml(posterFrameUrl)}"` : ''}>
       <source src="${escapeHtml(videoUrl)}" type="video/mp4">
     </video>
-    <div class="poster-overlay" id="poster" style="background-image:url('${escapeHtml(posterFrameUrl)}')">
+    <div class="poster-overlay" id="poster" style="${posterFrameUrl ? `background-image:url('${escapeHtml(posterFrameUrl)}')` : 'background:#111'}">
 ${posterCtas}
       <div class="tap-hint">Tap to play</div>
     </div>

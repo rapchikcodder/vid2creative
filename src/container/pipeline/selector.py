@@ -1,17 +1,20 @@
 """
 Multi-pass frame selector.
 
-Combines optical flow, scene detection, visual excitement analysis, and temporal
-position to score every extracted frame, then picks the top N with gap enforcement.
+Combines optical flow, CLIP visual scoring, scene detection, and spike detection
+to score every extracted frame, then picks the top N with gap enforcement.
 
-Scoring formula per frame:
+Scoring formula per frame (when CLIP available):
     cv_confidence = (
-        0.25 * motion_score           # optical flow magnitude + variance
+        0.40 * motion_score           # optical flow magnitude + direction entropy
+      + 0.30 * clip_score             # CLIP visual excitement (edge density, saturation)
       + 0.15 * scene_proximity_score  # closeness to a scene boundary
       + 0.10 * motion_spike_score     # is this a local peak in motion?
-      + 0.10 * temporal_score         # prefer mid-video over start/end
-      + 0.40 * visual_score           # edge density + saturation + entropy + brightness
+      + 0.05 * temporal_score         # constant 0.5 for all frames (no positional bias)
     )
+
+When CLIP is unavailable, weights redistribute proportionally:
+    0.57 * motion + 0.21 * scene + 0.14 * spike + 0.08 * temporal
 """
 import logging
 

@@ -75,6 +75,10 @@ app.put('/api/session/:sessionId', async (c) => {
 
 // Debug: test vision model raw response with full error details
 app.post('/api/debug/vision', async (c) => {
+  const secret = c.req.query('secret');
+  if (!secret || !c.env.DEBUG_SECRET || secret !== c.env.DEBUG_SECRET) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
   const body = await c.req.json<{ imageBase64: string }>();
   const imageBytes = Uint8Array.from(atob(body.imageBase64), (ch) => ch.charCodeAt(0));
   const imageArray = [...imageBytes];

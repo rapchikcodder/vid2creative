@@ -5,6 +5,7 @@ Detects hard cuts and content-based changes (significant visual shift
 within a continuous shot). Scene boundaries matter because action moments
 often occur RIGHT AFTER a cut — the editor cut TO the action.
 """
+import cv2
 from scenedetect import detect, ContentDetector
 from .types import SceneBoundary
 
@@ -25,8 +26,11 @@ def detect_scene_boundaries(
     Returns:
         List of SceneBoundary sorted by timestamp
     """
-    # Assume ~30fps for min_scene_len frame count
-    min_scene_frames = max(1, int(min_scene_len_sec * 30))
+    # Use actual video FPS instead of assuming 30 (handles 24fps/60fps content)
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    cap.release()
+    min_scene_frames = max(1, int(min_scene_len_sec * fps))
 
     try:
         scene_list = detect(

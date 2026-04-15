@@ -3,6 +3,7 @@ export interface Env {
   KV: KVNamespace;
   R2: R2Bucket;
   CV_PIPELINE: DurableObjectNamespace;
+  DEBUG_SECRET?: string;  // Optional secret for debug endpoints; set via wrangler secret put DEBUG_SECRET
 }
 
 // --- CV Pipeline types (returned from Container) ---

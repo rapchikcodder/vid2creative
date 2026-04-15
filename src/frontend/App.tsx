@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useHistory } from './hooks/useHistory';
 import VideoUploader from './components/VideoUploader';
 import FrameExtractor from './components/FrameExtractor';
 import OverlayEditor from './components/OverlayEditor';
@@ -40,7 +41,7 @@ export default function App() {
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [frames, setFrames] = useState<ExtractedFrame[]>([]);
-  const [config, setConfig] = useState<CreativeConfig>(DEFAULT_CONFIG);
+  const { state: config, push: pushConfig, undo: undoConfig, redo: redoConfig, canUndo, canRedo } = useHistory<CreativeConfig>(DEFAULT_CONFIG);
 
   function handleUploadComplete(file: File, sess: Session) {
     setVideoFile(file);
@@ -65,19 +66,19 @@ export default function App() {
         pauseVideo: true,
       }));
 
-    setConfig(prev => ({
-      ...prev,
+    pushConfig({
+      ...config,
       timeline: events,
       posterFrameIndex: analyzedFrames[0]?.index ?? 0,
       videoUrl: session?.videoUrl ?? '',
-      focusX: focusX ?? prev.focusX,
-    } as CreativeConfig));
+      focusX: focusX ?? config.focusX,
+    } as CreativeConfig);
 
     setStep('edit');
   }
 
   function handleConfigChange(next: CreativeConfig) {
-    setConfig(next);
+    pushConfig(next);
   }
 
   const STEPS: { key: Step; label: string; num: number }[] = [
@@ -135,6 +136,10 @@ export default function App() {
             frames={frames}
             config={config}
             onConfigChange={handleConfigChange}
+            onUndo={undoConfig}
+            onRedo={redoConfig}
+            canUndo={canUndo}
+            canRedo={canRedo}
             onBack={() => setStep('extract')}
             onNext={() => setStep('export')}
           />

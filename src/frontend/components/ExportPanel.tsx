@@ -12,10 +12,12 @@ interface Props {
 }
 
 const PRESETS = [
-  { label: 'Mobile', width: 360, height: 640 },
-  { label: 'Mobile Alt', width: 320, height: 480 },
+  { label: 'Unity Ads', width: 360, height: 640 },
+  { label: 'AppLovin', width: 320, height: 480 },
+  { label: 'Meta Story', width: 1080, height: 1920 },
+  { label: 'TikTok', width: 1080, height: 1920 },
   { label: 'Landscape', width: 640, height: 360 },
-  { label: 'Square', width: 400, height: 400 },
+  { label: 'Square', width: 1080, height: 1080 },
   { label: 'Banner', width: 300, height: 250 },
 ];
 

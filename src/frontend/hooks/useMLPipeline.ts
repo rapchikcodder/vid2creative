@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { uploadVideo, detectActions } from '../lib/api';
 import type { ExtractedFrame, ScoredFrame, ActionCluster, DetectActionsResponse, OverlayElement, AnimationType } from '../lib/types';
 
@@ -97,6 +97,7 @@ export function useMLPipeline(): UseMLPipelineReturn {
   const [mlClusters, setMlClusters] = useState<ActionCluster[] | null>(null);
   const [mlError, setMlError] = useState<string | null>(null);
   const [mlFocusX, setMlFocusX] = useState<number | undefined>(undefined);
+  const uploadedRef = useRef<{ sessionId: string; file: File } | null>(null);
 
   const runMLPipeline = useCallback(async (
     videoFile: File,
@@ -105,13 +106,20 @@ export function useMLPipeline(): UseMLPipelineReturn {
     currentFrames: ExtractedFrame[],
     onFramesUpdated: (frames: ExtractedFrame[]) => void,
   ) => {
-    setMlStatus('uploading');
     setMlError(null);
     try {
-      const uploadResult = await uploadVideo(videoFile);
+      let sessionId: string;
+      if (uploadedRef.current?.file === videoFile) {
+        sessionId = uploadedRef.current.sessionId;
+      } else {
+        setMlStatus('uploading');
+        const uploadResult = await uploadVideo(videoFile);
+        uploadedRef.current = { sessionId: uploadResult.sessionId, file: videoFile };
+        sessionId = uploadResult.sessionId;
+      }
       setMlStatus('detecting');
       const result: DetectActionsResponse = await detectActions(
-        uploadResult.sessionId,
+        sessionId,
         intervalSec,
         sensitivity,
       );
