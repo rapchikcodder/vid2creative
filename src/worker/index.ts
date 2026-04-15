@@ -8,6 +8,8 @@ import statusRoute from './routes/status';
 import exportRoute from './routes/export';
 import processRoute from './routes/process';
 import detectRoute from './routes/detect';
+import { rateLimiter } from './middleware/rate-limiter';
+import { handleScheduled } from './cron';
 
 // Python CV container — FastAPI + FFmpeg + OpenCV
 export class CvPipeline extends Container {
@@ -22,6 +24,13 @@ app.use('/api/*', cors({
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowHeaders: ['Content-Type'],
 }));
+
+// Rate limiting on mutating endpoints
+app.use('/api/upload', rateLimiter);
+app.use('/api/analyze', rateLimiter);
+app.use('/api/process', rateLimiter);
+app.use('/api/detect', rateLimiter);
+app.use('/api/export', rateLimiter);
 
 app.get('/api/health', (c) => {
   return c.json({ status: 'ok', version: '2.0.0', container: 'enabled' });
@@ -108,4 +117,9 @@ app.onError((err, c) => {
   return c.json({ error: 'INTERNAL_ERROR', message: 'An unexpected error occurred' }, 500);
 });
 
-export default app;
+export default {
+  fetch: app.fetch,
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(handleScheduled(env));
+  },
+};

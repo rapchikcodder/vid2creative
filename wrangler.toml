@@ -29,3 +29,7 @@ new_sqlite_classes = ["CvPipeline"]
 class_name = "CvPipeline"
 image = "./src/container/Dockerfile"
 instance_type = "basic"
+
+# Cron: warm container every 5 min + cleanup expired R2/KV every hour
+[triggers]
+crons = ["*/5 * * * *"]

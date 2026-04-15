@@ -13,8 +13,12 @@ Scoring formula per frame:
       + 0.40 * visual_score           # edge density + saturation + entropy + brightness
     )
 """
+import logging
+
 from .types import ExtractedFrame, SceneBoundary, CandidateFrame, ScoredFrame, ActionCluster
 from .clip_scorer import score_frames_clip
+
+logger = logging.getLogger(__name__)
 
 
 def _score_all_frames(
@@ -67,21 +71,40 @@ def _score_all_frames(
         frame.temporal_score = 0.5
 
     # === Pass 4: Visual excitement scoring (edge density, saturation, entropy) ===
-    clip_scores = score_frames_clip(frames)
-    for frame, cs in zip(frames, clip_scores):
-        frame.clip_score = cs
+    clip_available = True
+    try:
+        clip_scores = score_frames_clip(frames)
+        for frame, cs in zip(frames, clip_scores):
+            frame.clip_score = cs
+    except Exception as exc:
+        logger.warning("CLIP scoring failed (%s); redistributing weight to other signals", exc)
+        clip_available = False
+        for frame in frames:
+            frame.clip_score = 0.0
 
     # === Pass 5: Combined CV confidence ===
     # Motion (with direction entropy) is the strongest signal at 40%.
     # Visual (with SSIM structural change) provides per-frame quality at 30%.
     # Scene proximity and spike detection are supporting signals.
+    #
+    # When CLIP is unavailable its 0.30 weight is redistributed proportionally
+    # across the remaining signals (sum of non-CLIP weights = 0.70):
+    #   motion:          0.40/0.70 ≈ 0.57
+    #   scene_proximity: 0.15/0.70 ≈ 0.21
+    #   motion_spike:    0.10/0.70 ≈ 0.14
+    #   temporal:        0.05/0.70 ≈ 0.08
+    if clip_available:
+        w_motion, w_clip, w_scene, w_spike, w_temporal = 0.40, 0.30, 0.15, 0.10, 0.05
+    else:
+        w_motion, w_clip, w_scene, w_spike, w_temporal = 0.57, 0.00, 0.21, 0.14, 0.08
+
     for frame in frames:
         frame.cv_confidence = round(
-            0.40 * frame.motion_score
-            + 0.30 * frame.clip_score
-            + 0.15 * frame.scene_proximity_score
-            + 0.10 * frame.motion_spike_score
-            + 0.05 * frame.temporal_score,
+            w_motion * frame.motion_score
+            + w_clip * frame.clip_score
+            + w_scene * frame.scene_proximity_score
+            + w_spike * frame.motion_spike_score
+            + w_temporal * frame.temporal_score,
             4,
         )
 
