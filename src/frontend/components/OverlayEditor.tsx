@@ -41,9 +41,13 @@ export default function OverlayEditor({ videoFile, frames, config, onConfigChang
   const [speed, setSpeed] = useState(1);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [showTemplates, setShowTemplates] = useState(false);
-  const videoUrl = useRef(URL.createObjectURL(videoFile));
+  const [videoUrl, setVideoUrl] = useState('');
 
-  useEffect(() => () => { URL.revokeObjectURL(videoUrl.current); }, []);
+  useEffect(() => {
+    const url = URL.createObjectURL(videoFile);
+    setVideoUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [videoFile]);
 
   const tick = useCallback(() => {
     if (videoRef.current) setCurrentTime(videoRef.current.currentTime);

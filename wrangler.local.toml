@@ -1,0 +1,28 @@
+name = "vid2creative"
+main = "src/worker/index.ts"
+compatibility_date = "2026-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+[ai]
+binding = "AI"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "9e2f03c38f2d443e978dd24fc7a678d2"
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "vid2creative-assets"
+
+[assets]
+directory = "./dist"
+
+[[durable_objects.bindings]]
+name = "CV_PIPELINE"
+class_name = "CvPipeline"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["CvPipeline"]
+
+# No [[containers]] — skips Docker/container startup so wrangler dev works on Windows
