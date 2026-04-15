@@ -49,13 +49,6 @@ export default function OverlayEditor({ videoFile, frames, config, onConfigChang
     return () => URL.revokeObjectURL(url);
   }, [videoFile]);
 
-  // Force video reload when blob URL is ready (src="" can leave element in error state)
-  useEffect(() => {
-    if (videoUrl && videoRef.current) {
-      videoRef.current.load();
-    }
-  }, [videoUrl]);
-
   const tick = useCallback(() => {
     if (videoRef.current) setCurrentTime(videoRef.current.currentTime);
     rafRef.current = requestAnimationFrame(tick);
@@ -175,8 +168,9 @@ export default function OverlayEditor({ videoFile, frames, config, onConfigChang
         <div className="flex-1 flex items-center justify-center bg-gray-950 relative overflow-hidden">
           <div ref={videoWrapRef} className="relative" style={{ maxHeight: '60vh' }}>
             <video
+              key={videoUrl}
               ref={videoRef}
-              src={videoUrl.current}
+              src={videoUrl}
               className="max-h-[60vh] max-w-full rounded-lg"
               onLoadedMetadata={e => setDuration((e.target as HTMLVideoElement).duration)}
               onEnded={() => setPlaying(false)}
