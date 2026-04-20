@@ -18,6 +18,7 @@ class ExtractedFrame:
     scene_proximity_score: float = 0.0
     motion_spike_score: float = 0.0
     temporal_score: float = 0.5
+    multi_scale_score: float = 0.0   # weighted avg of short/med/long-window motion
 
 
 class SceneBoundary(BaseModel):

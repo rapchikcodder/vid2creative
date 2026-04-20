@@ -166,3 +166,43 @@ def test_detect_actions_empty():
     scored, clusters = detect_all_actions([], scene_boundaries=[])
     assert scored == []
     assert clusters == []
+
+
+# ── New helper function tests ─────────────────────────────────────────────
+
+
+def test_calculate_optimal_frame_count():
+    """Adaptive frame count: short → 8, 30s → 18, 60s → 24."""
+    from pipeline.selector import calculate_optimal_frame_count
+    assert calculate_optimal_frame_count(10.0) >= 8
+    assert calculate_optimal_frame_count(30.0) >= 18
+    assert calculate_optimal_frame_count(60.0) >= 24
+    # Monotonically non-decreasing
+    assert calculate_optimal_frame_count(60.0) >= calculate_optimal_frame_count(30.0)
+    assert calculate_optimal_frame_count(30.0) >= calculate_optimal_frame_count(10.0)
+
+
+def test_calculate_adaptive_gap():
+    """High motion → small gap (≤ 0.7s); low motion → larger gap (≥ 1.8s)."""
+    from pipeline.selector import calculate_adaptive_gap
+    high_motion = [0.8] * 10
+    low_motion = [0.1] * 10
+    assert calculate_adaptive_gap(high_motion) <= 0.7
+    assert calculate_adaptive_gap(low_motion) >= 1.8
+    # Empty list returns base_gap * 1.3 (defaults to low-motion path)
+    assert calculate_adaptive_gap([]) >= 1.8
+
+
+def test_segment_based_selection():
+    """10 frames, 2 segments, 3 per segment → 6 frames in timestamp order."""
+    from pipeline.selector import segment_based_selection
+    frames = [make_frame(i, float(i * 3), motion=0.5) for i in range(10)]
+    # Assign varied cv_confidence so selection picks distinct top frames per segment
+    for i, f in enumerate(frames):
+        f.cv_confidence = float(i) / 10.0
+    result = segment_based_selection(frames, num_segments=2, frames_per_segment=3)
+    assert len(result) <= 6
+    assert len(result) >= 1
+    # Must be sorted by timestamp
+    timestamps = [f.timestamp for f in result]
+    assert timestamps == sorted(timestamps)

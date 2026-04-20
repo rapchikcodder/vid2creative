@@ -17,11 +17,70 @@ When CLIP is unavailable, weights redistribute proportionally:
     0.57 * motion + 0.21 * scene + 0.14 * spike + 0.08 * temporal
 """
 import logging
+import numpy as np
 
 from .types import ExtractedFrame, SceneBoundary, CandidateFrame, ScoredFrame, ActionCluster
 from .clip_scorer import score_frames_clip
 
 logger = logging.getLogger(__name__)
+
+
+def calculate_optimal_frame_count(duration_seconds: float) -> int:
+    """Adaptive frame count — 10-15 frames/min is industry standard."""
+    if duration_seconds < 10:
+        return max(8, int(duration_seconds * 1.2))
+    if duration_seconds < 30:
+        return max(12, int(duration_seconds * 0.6))
+    if duration_seconds < 60:
+        return max(18, int(duration_seconds * 0.4))
+    return max(24, int(duration_seconds * 0.3))
+
+
+def calculate_adaptive_gap(motion_scores: list[float], base_gap: float = 1.5) -> float:
+    """Smaller gap for high-action, larger for low-action videos."""
+    avg = float(np.mean(motion_scores)) if motion_scores else 0.0
+    if avg > 0.7:
+        return base_gap * 0.4   # ~0.6s — rapid sequences
+    if avg > 0.5:
+        return base_gap * 0.7   # ~1.05s
+    return base_gap * 1.3       # ~2.0s
+
+
+def calculate_adaptive_threshold(cv_confidences: list[float], target_percentile: float = 0.65) -> float:
+    """65th-percentile threshold = keep top 35%; floor at 0.01 to avoid dropping all frames."""
+    if not cv_confidences:
+        return 0.35
+    sorted_scores = sorted(cv_confidences, reverse=True)
+    idx = int(len(sorted_scores) * target_percentile)
+    return max(0.01, sorted_scores[min(idx, len(sorted_scores) - 1)])
+
+
+def add_multi_scale_scores(frames: list[ExtractedFrame]) -> None:
+    """Mutates frames in place: adds motion context at 0.5s/1.5s/4s windows."""
+    for frame in frames:
+        def window_avg(w: float) -> float:
+            win = [f.motion_score for f in frames if abs(f.timestamp - frame.timestamp) <= w / 2]
+            return float(np.mean(win)) if win else 0.0
+        frame.multi_scale_score = round(
+            0.50 * window_avg(0.5) + 0.30 * window_avg(1.5) + 0.20 * window_avg(4.0), 4
+        )
+
+
+def segment_based_selection(
+    frames: list[ExtractedFrame], num_segments: int, frames_per_segment: int
+) -> list[ExtractedFrame]:
+    """Divide video into N segments, take top M by cv_confidence from each."""
+    if not frames:
+        return []
+    duration = frames[-1].timestamp
+    seg_dur = duration / num_segments if num_segments > 0 else 1.0
+    selected: list[ExtractedFrame] = []
+    for i in range(num_segments):
+        seg = [f for f in frames if i * seg_dur <= f.timestamp < (i + 1) * seg_dur]
+        seg.sort(key=lambda f: f.cv_confidence, reverse=True)
+        selected.extend(seg[:frames_per_segment])
+    selected.sort(key=lambda f: f.timestamp)
+    return selected
 
 
 def _score_all_frames(
@@ -119,37 +178,82 @@ def select_best_candidates(
     min_gap_seconds: float = 2.0,
     scene_proximity_window: float = 2.0,
 ) -> list[CandidateFrame]:
-    """Score all frames and select top candidates for AI analysis."""
+    """Score all frames and select top candidates for AI analysis.
+
+    Uses adaptive frame count, adaptive gap, multi-scale temporal scoring,
+    and segment-based temporal diversity selection.
+    """
     if not frames:
         return []
 
     _score_all_frames(frames, scene_boundaries, scene_proximity_window)
+    add_multi_scale_scores(frames)
 
-    # === Pass 5: Select top-N with gap enforcement ===
-    sorted_frames = sorted(frames, key=lambda f: f.cv_confidence, reverse=True)
-    selected: list[CandidateFrame] = []
-
-    for frame in sorted_frames:
-        if len(selected) >= max_candidates:
-            break
-        too_close = any(
-            abs(frame.timestamp - s.timestamp) < min_gap_seconds
-            for s in selected
+    # Re-weight cv_confidence to include multi_scale_score
+    for frame in frames:
+        frame.cv_confidence = round(
+            0.25 * frame.motion_score
+            + 0.20 * frame.multi_scale_score
+            + 0.25 * frame.clip_score
+            + 0.15 * frame.scene_proximity_score
+            + 0.10 * frame.motion_spike_score
+            + 0.05 * frame.temporal_score,
+            4,
         )
-        if too_close:
-            continue
-        selected.append(CandidateFrame(
-            index=frame.index,
-            timestamp=frame.timestamp,
-            motion_score=frame.motion_score,
-            near_scene_boundary=frame.near_scene_boundary,
-            scene_type=frame.scene_type,
-            jpeg_base64=frame.jpeg_base64,
-            cv_confidence=frame.cv_confidence,
-        ))
 
-    selected.sort(key=lambda c: c.timestamp)
-    return selected
+    # Adaptive frame count and gap based on video characteristics
+    duration = frames[-1].timestamp if frames else 0.0
+    motion_scores = [f.motion_score for f in frames]
+    optimal_count = calculate_optimal_frame_count(duration)
+    adaptive_gap = calculate_adaptive_gap(motion_scores)
+
+    # Use caller-supplied max_candidates if it's larger than adaptive, else adaptive
+    target_count = max(max_candidates, optimal_count)
+    gap = min(min_gap_seconds, adaptive_gap) if min_gap_seconds < adaptive_gap else adaptive_gap
+
+    # Try segment-based selection first for temporal diversity
+    num_segments = max(2, target_count // 3)
+    frames_per_seg = max(1, target_count // num_segments + 1)
+    segment_result = segment_based_selection(frames, num_segments, frames_per_seg)
+
+    # Fall back to sorted gap-based if segment_based returns < 60% of target
+    if len(segment_result) < max(1, int(target_count * 0.6)):
+        sorted_frames = sorted(frames, key=lambda f: f.cv_confidence, reverse=True)
+        gap_selected: list[ExtractedFrame] = []
+        for frame in sorted_frames:
+            if len(gap_selected) >= target_count:
+                break
+            too_close = any(abs(frame.timestamp - s.timestamp) < gap for s in gap_selected)
+            if not too_close:
+                gap_selected.append(frame)
+        pool = gap_selected
+    else:
+        # Deduplicate segment result by gap enforcement
+        sorted_seg = sorted(segment_result, key=lambda f: f.cv_confidence, reverse=True)
+        pool: list[ExtractedFrame] = []
+        for frame in sorted_seg:
+            if len(pool) >= target_count:
+                break
+            too_close = any(abs(frame.timestamp - s.timestamp) < gap for s in pool)
+            if not too_close:
+                pool.append(frame)
+
+    # Trim to max_candidates (the hard caller-specified limit)
+    pool.sort(key=lambda f: f.timestamp)
+    pool = pool[:max_candidates]
+
+    return [
+        CandidateFrame(
+            index=f.index,
+            timestamp=f.timestamp,
+            motion_score=f.motion_score,
+            near_scene_boundary=f.near_scene_boundary,
+            scene_type=f.scene_type,
+            jpeg_base64=f.jpeg_base64,
+            cv_confidence=f.cv_confidence,
+        )
+        for f in pool
+    ]
 
 
 def detect_all_actions(
@@ -170,6 +274,19 @@ def detect_all_actions(
         return [], []
 
     _score_all_frames(frames, scene_boundaries, scene_proximity_window)
+    add_multi_scale_scores(frames)
+
+    # Compute percentile-based adaptive threshold.
+    # Use the more lenient of: caller-supplied threshold vs. percentile.
+    # This guarantees ~top-35% are always captured even on low-motion videos,
+    # while preserving caller intent when their threshold is lower.
+    cv_confidences = [f.cv_confidence for f in frames]
+    percentile_threshold = calculate_adaptive_threshold(cv_confidences)
+    effective_threshold = min(action_threshold, percentile_threshold)
+    logger.info(
+        "detect_all_actions: caller=%.3f percentile=%.3f effective=%.3f",
+        action_threshold, percentile_threshold, effective_threshold,
+    )
 
     # Build scored frames list (lightweight, no image data)
     all_scored: list[ScoredFrame] = []
@@ -185,29 +302,11 @@ def detect_all_actions(
             clip_score=f.clip_score,
             near_scene_boundary=f.near_scene_boundary,
             scene_type=f.scene_type,
-            is_action=f.cv_confidence >= action_threshold,
+            is_action=f.cv_confidence >= effective_threshold,
         ))
 
     # Cluster adjacent action frames
     action_frames = [(i, f) for i, f in enumerate(frames) if all_scored[i].is_action]
-
-    # Adaptive threshold fallback: guarantee at least MIN_FALLBACK selected frames.
-    # This handles uniform-scoring videos (e.g. side-scrollers) where the fixed
-    # threshold captures nothing — we fall back to top-N by percentile rank.
-    MIN_FALLBACK = 3
-    if len(action_frames) < MIN_FALLBACK and len(frames) >= MIN_FALLBACK:
-        sorted_scores = sorted((s.cv_confidence for s in all_scored), reverse=True)
-        adaptive_threshold = sorted_scores[MIN_FALLBACK - 1]  # score of N-th best frame
-        if adaptive_threshold < action_threshold:
-            logger.info(
-                "Adaptive threshold: fixed=%.3f captured %d/%d frames; "
-                "falling back to top-%d threshold=%.3f",
-                action_threshold, len(action_frames), len(frames),
-                MIN_FALLBACK, adaptive_threshold,
-            )
-            for scored in all_scored:
-                scored.is_action = scored.cv_confidence >= adaptive_threshold
-            action_frames = [(i, f) for i, f in enumerate(frames) if all_scored[i].is_action]
 
     clusters: list[ActionCluster] = []
 
