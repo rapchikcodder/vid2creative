@@ -2,7 +2,7 @@ import { useState, useCallback, useRef } from 'react';
 import { uploadVideo, detectActions } from '../lib/api';
 import type { ExtractedFrame, ScoredFrame, ActionCluster, DetectActionsResponse, OverlayElement, AnimationType } from '../lib/types';
 
-const MAX_ACTIONS = 6;
+const MAX_ACTIONS = 10;
 const MIN_ACTION_GAP = 2.0;
 const DEFAULT_OVERLAY: OverlayElement = { type: 'none', text: '', position: 'top-right', visible: false };
 

@@ -4,7 +4,7 @@ import { useFrameExtraction } from '../hooks/useFrameExtraction';
 import { useMLPipeline, selectTopActions, mergeMLResults } from '../hooks/useMLPipeline';
 import { useAIAnalysis } from '../hooks/useAIAnalysis';
 
-const MAX_ACTIONS = 6;
+const MAX_ACTIONS = 10;
 const MIN_ACTION_GAP = 2.0;
 const DEFAULT_SENSITIVITY = 0.45;
 
@@ -75,7 +75,7 @@ export default function FrameExtractor({ session, videoFile, onComplete }: Props
   function handleContinue() {
     const selected = frames.filter(f => f.isSelected).map(f => ({
       ...f,
-      refinedTimestamp: Math.max(0, f.timestamp - 2.5),
+      refinedTimestamp: f.timestamp,
     }));
     if (selected.length === 0) {
       setError('Select at least one action frame to continue');

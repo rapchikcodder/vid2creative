@@ -22,7 +22,7 @@ function computeMotionScore(
   return { score: total / (DIFF_SIZE * DIFF_SIZE * 255), pixelData: data };
 }
 
-const MAX_ACTIONS = 6;
+const MAX_ACTIONS = 10;
 const MIN_ACTION_GAP = 2.0;
 
 interface UseFrameExtractionReturn {
@@ -130,7 +130,7 @@ export function useFrameExtraction(): UseFrameExtractionReturn {
     const withSelection = extracted.map(f => ({
       ...f,
       isSelected: pickSet.has(f.index),
-      refinedTimestamp: Math.max(0, f.timestamp - 2.5),
+      refinedTimestamp: f.timestamp,
     }));
 
     framesRef.current = withSelection;

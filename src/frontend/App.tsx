@@ -59,7 +59,7 @@ export default function App() {
       .map((f) => ({
         id: Math.random().toString(36).slice(2, 10),
         frameIndex: f.index,
-        timestamp: f.refinedTimestamp ?? Math.max(0, f.timestamp - 2.5),
+        timestamp: f.refinedTimestamp ?? f.timestamp,
         duration: 0.6,
         cta: f.analysis?.cta ?? { ...DEFAULT_CTA, text: f.analysis?.actionLabel || 'Play Now' },
         overlay: f.analysis?.overlay ?? DEFAULT_OVERLAY,
