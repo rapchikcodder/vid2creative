@@ -190,6 +190,25 @@ def detect_all_actions(
 
     # Cluster adjacent action frames
     action_frames = [(i, f) for i, f in enumerate(frames) if all_scored[i].is_action]
+
+    # Adaptive threshold fallback: guarantee at least MIN_FALLBACK selected frames.
+    # This handles uniform-scoring videos (e.g. side-scrollers) where the fixed
+    # threshold captures nothing — we fall back to top-N by percentile rank.
+    MIN_FALLBACK = 3
+    if len(action_frames) < MIN_FALLBACK and len(frames) >= MIN_FALLBACK:
+        sorted_scores = sorted((s.cv_confidence for s in all_scored), reverse=True)
+        adaptive_threshold = sorted_scores[MIN_FALLBACK - 1]  # score of N-th best frame
+        if adaptive_threshold < action_threshold:
+            logger.info(
+                "Adaptive threshold: fixed=%.3f captured %d/%d frames; "
+                "falling back to top-%d threshold=%.3f",
+                action_threshold, len(action_frames), len(frames),
+                MIN_FALLBACK, adaptive_threshold,
+            )
+            for scored in all_scored:
+                scored.is_action = scored.cv_confidence >= adaptive_threshold
+            action_frames = [(i, f) for i, f in enumerate(frames) if all_scored[i].is_action]
+
     clusters: list[ActionCluster] = []
 
     if not action_frames:

@@ -1,6 +1,10 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import type { ExtractedFrame, CreativeConfig, TimelineEvent, CTAButton, AnimationType, ButtonStyle } from '../lib/types';
+import type { ExtractedFrame, CreativeConfig, TimelineEvent, CTAButton, AnimationType, ButtonStyle, Layer, LayerType } from '../lib/types';
 import TemplateSelector from './TemplateSelector';
+import LayerPanel from './LayerPanel';
+import LayerPropertiesPanel from './LayerPropertiesPanel';
+import LayerCanvas from './LayerCanvas';
+import { useLayers } from '../hooks/useLayers';
 
 interface Props {
   videoFile: File;
@@ -42,6 +46,14 @@ export default function OverlayEditor({ videoFile, frames, config, onConfigChang
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [showTemplates, setShowTemplates] = useState(false);
   const [videoUrl, setVideoUrl] = useState('');
+  const [activeTab, setActiveTab] = useState<'timeline' | 'layers'>('timeline');
+  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
+  const [videoSize, setVideoSize] = useState({ width: 360, height: 640 });
+
+  const layers = config.layers ?? [];
+  const { addLayer, updateLayer, removeLayer, reorderLayers, duplicateLayer } = useLayers(
+    config, onConfigChange, selectedLayerId, setSelectedLayerId,
+  );
 
   useEffect(() => {
     const url = URL.createObjectURL(videoFile);
@@ -58,6 +70,12 @@ export default function OverlayEditor({ videoFile, frames, config, onConfigChang
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
   }, [tick]);
+
+  function onVideoLoaded(e: React.SyntheticEvent<HTMLVideoElement>) {
+    const v = e.target as HTMLVideoElement;
+    setDuration(v.duration);
+    setVideoSize({ width: v.clientWidth, height: v.clientHeight });
+  }
 
   function togglePlay() {
     const v = videoRef.current;
@@ -89,6 +107,7 @@ export default function OverlayEditor({ videoFile, frames, config, onConfigChang
     };
     onConfigChange({ ...config, timeline: [...config.timeline, newEvent] });
     setSelectedEventId(newEvent.id);
+    setActiveTab('timeline');
   }
 
   function deleteEvent(id: string) {
@@ -161,26 +180,40 @@ export default function OverlayEditor({ videoFile, frames, config, onConfigChang
     ),
   );
 
+  const selectedLayer = layers.find(l => l.id === selectedLayerId) ?? null;
+
   return (
     <div className="flex h-[calc(100vh-73px)]">
       {/* Left panel: video + timeline */}
       <div className="flex-1 flex flex-col min-w-0 border-r border-gray-800">
         <div className="flex-1 flex items-center justify-center bg-gray-950 relative overflow-hidden">
           <div ref={videoWrapRef} className="relative" style={{ maxHeight: '60vh' }}>
-            <video
-              key={videoUrl}
-              ref={videoRef}
-              src={videoUrl}
-              className="max-h-[60vh] max-w-full rounded-lg"
-              onLoadedMetadata={e => setDuration((e.target as HTMLVideoElement).duration)}
-              onEnded={() => setPlaying(false)}
-              muted
-            />
+            <LayerCanvas
+              layers={layers}
+              selectedId={selectedLayerId}
+              currentTime={currentTime}
+              containerWidth={videoSize.width}
+              containerHeight={videoSize.height}
+              onSelectLayer={id => { setSelectedLayerId(id); if (id) setActiveTab('layers'); }}
+              onUpdateLayer={(id, patch) => updateLayer(id, patch)}
+            >
+              <video
+                key={videoUrl}
+                ref={videoRef}
+                src={videoUrl}
+                className="max-h-[60vh] max-w-full rounded-lg"
+                onLoadedMetadata={onVideoLoaded}
+                onEnded={() => setPlaying(false)}
+                muted
+              />
+            </LayerCanvas>
+            {/* CTA overlays on top of LayerCanvas */}
             {activeOverlays.map(ev => (
               <div key={ev.id}
                 className="absolute"
                 style={{ left: `${ev.cta.position.x}%`, top: `${ev.cta.position.y}%`, transform: 'translate(-50%, -50%)',
-                  cursor: ev.id === selectedEventId ? 'move' : 'default', pointerEvents: ev.id === selectedEventId ? 'auto' : 'none' }}
+                  cursor: ev.id === selectedEventId ? 'move' : 'default', pointerEvents: ev.id === selectedEventId ? 'auto' : 'none',
+                  zIndex: 100 }}
                 onMouseDown={ev.id === selectedEventId ? (e) => handleCtaDragStart(e, ev.id) : undefined}>
                 <span style={{
                   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -262,121 +295,178 @@ export default function OverlayEditor({ videoFile, frames, config, onConfigChang
         </div>
       </div>
 
-      {/* Right panel: event editor */}
-      <div className="w-72 flex flex-col bg-gray-900 overflow-auto">
-        <div className="p-4 border-b border-gray-800 flex items-center justify-between">
-          <h3 className="font-semibold">Events ({config.timeline.length})</h3>
-          <div className="flex gap-1.5">
-            <button onClick={onUndo} disabled={!canUndo} title="Undo (⌘Z)"
-              className="w-8 h-8 flex items-center justify-center rounded transition-colors disabled:opacity-30 bg-gray-700 hover:bg-gray-600 text-sm">
-              ↩
-            </button>
-            <button onClick={onRedo} disabled={!canRedo} title="Redo (⌘⇧Z)"
-              className="w-8 h-8 flex items-center justify-center rounded transition-colors disabled:opacity-30 bg-gray-700 hover:bg-gray-600 text-sm">
-              ↪
-            </button>
-            <button onClick={onBack}
-              className="bg-gray-700 hover:bg-gray-600 text-white text-sm px-3 py-1.5 rounded-lg transition-colors">
-              &#x2190; Back
-            </button>
-            <button onClick={onNext}
-              className="bg-indigo-600 hover:bg-indigo-500 text-white text-sm px-3 py-1.5 rounded-lg transition-colors">
-              Export &#x2192;
-            </button>
+      {/* Right panel: tab switcher + event / layer editor */}
+      <div className="w-72 flex flex-col bg-gray-900 overflow-hidden">
+        {/* Header with tabs */}
+        <div className="px-4 pt-3 pb-0 border-b border-gray-800">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex gap-1">
+              <button
+                onClick={() => setActiveTab('timeline')}
+                className={`text-sm px-3 py-1.5 rounded-t transition-colors ${activeTab === 'timeline' ? 'bg-gray-800 text-white' : 'text-gray-500 hover:text-gray-300'}`}
+              >
+                Timeline ({config.timeline.length})
+              </button>
+              <button
+                onClick={() => setActiveTab('layers')}
+                className={`text-sm px-3 py-1.5 rounded-t transition-colors ${activeTab === 'layers' ? 'bg-gray-800 text-white' : 'text-gray-500 hover:text-gray-300'}`}
+              >
+                Layers ({layers.length})
+              </button>
+            </div>
+            <div className="flex gap-1.5">
+              <button onClick={onUndo} disabled={!canUndo} title="Undo (⌘Z)"
+                className="w-8 h-8 flex items-center justify-center rounded transition-colors disabled:opacity-30 bg-gray-700 hover:bg-gray-600 text-sm">
+                ↩
+              </button>
+              <button onClick={onRedo} disabled={!canRedo} title="Redo (⌘⇧Z)"
+                className="w-8 h-8 flex items-center justify-center rounded transition-colors disabled:opacity-30 bg-gray-700 hover:bg-gray-600 text-sm">
+                ↪
+              </button>
+              <button onClick={onBack}
+                className="bg-gray-700 hover:bg-gray-600 text-white text-sm px-2 py-1.5 rounded-lg transition-colors">
+                &#x2190;
+              </button>
+              <button onClick={onNext}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white text-sm px-2 py-1.5 rounded-lg transition-colors">
+                Export
+              </button>
+            </div>
           </div>
         </div>
 
-        <div className="flex-1 overflow-auto">
-          {config.timeline.length === 0 && (
-            <div className="p-4 text-gray-500 text-sm text-center">
-              No events yet.<br />Press &ldquo;Add Action Here&rdquo; while the video plays.
-            </div>
-          )}
-          {config.timeline.map(ev => (
-            <div key={ev.id}
-              className={`border-b border-gray-800 cursor-pointer ${selectedEventId === ev.id ? 'bg-gray-800' : 'hover:bg-gray-800/50'}`}
-              onClick={() => setSelectedEventId(selectedEventId === ev.id ? null : ev.id)}>
-              <div className="px-4 py-3 flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium">{ev.cta.text || 'Untitled'}</p>
-                  <p className="text-xs text-gray-500">{fmt(ev.timestamp)} &middot; {ev.duration}s</p>
-                </div>
-                <button onClick={e => { e.stopPropagation(); deleteEvent(ev.id); }}
-                  className="text-gray-600 hover:text-red-400 text-sm">&#x2715;</button>
+        {/* Timeline tab */}
+        {activeTab === 'timeline' && (
+          <div className="flex-1 overflow-auto">
+            {config.timeline.length === 0 && (
+              <div className="p-4 text-gray-500 text-sm text-center">
+                No events yet.<br />Press &ldquo;Add Action Here&rdquo; while the video plays.
               </div>
-
-              {selectedEventId === ev.id && (
-                <div className="px-4 pb-4 space-y-3" onClick={e => e.stopPropagation()}>
+            )}
+            {config.timeline.map(ev => (
+              <div key={ev.id}
+                className={`border-b border-gray-800 cursor-pointer ${selectedEventId === ev.id ? 'bg-gray-800' : 'hover:bg-gray-800/50'}`}
+                onClick={() => setSelectedEventId(selectedEventId === ev.id ? null : ev.id)}>
+                <div className="px-4 py-3 flex items-center justify-between">
                   <div>
-                    <label className="text-xs text-gray-400 block mb-1">Button text</label>
-                    <input value={ev.cta.text}
-                      onChange={e => updateCta(ev.id, { text: e.target.value })}
-                      className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm" />
+                    <p className="text-sm font-medium">{ev.cta.text || 'Untitled'}</p>
+                    <p className="text-xs text-gray-500">{fmt(ev.timestamp)} &middot; {ev.duration}s</p>
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-xs text-gray-400 block mb-1">Timestamp (s)</label>
-                      <input type="number" min={0} step={0.1} value={ev.timestamp}
-                        onChange={e => updateEvent(ev.id, { timestamp: parseFloat(e.target.value) })}
-                        className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm" />
-                    </div>
-                    <div>
-                      <label className="text-xs text-gray-400 block mb-1">Duration (s)</label>
-                      <input type="number" min={0.3} max={30} step={0.1} value={ev.duration}
-                        onChange={e => updateEvent(ev.id, { duration: parseFloat(e.target.value) })}
-                        className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm" />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-400 block mb-1">Position <span className="text-gray-600">(drag in preview)</span></label>
-                    <div className="flex gap-2 text-xs text-gray-300 font-mono bg-gray-800 rounded px-2 py-1.5 border border-gray-700">
-                      <span>x: {ev.cta.position.x}%</span>
-                      <span className="text-gray-600">·</span>
-                      <span>y: {ev.cta.position.y}%</span>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-400 block mb-1">Style</label>
-                    <select value={ev.cta.style}
-                      onChange={e => updateCta(ev.id, { style: e.target.value as ButtonStyle })}
-                      className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm">
-                      {['primary','secondary','floating','pulse','glow','slide-in','bounce','glass'].map(s => (
-                        <option key={s} value={s}>{s}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-400 block mb-1">Size</label>
-                    <div className="flex gap-2">
-                      {(['small','medium','large'] as const).map(sz => (
-                        <button key={sz} onClick={() => updateCta(ev.id, { size: sz })}
-                          className={`flex-1 text-xs py-1 rounded transition-colors ${ev.cta.size === sz ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>
-                          {sz}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-400 block mb-1">Animation</label>
-                    <select value={ev.animation}
-                      onChange={e => updateEvent(ev.id, { animation: e.target.value as AnimationType })}
-                      className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm">
-                      {['fade-in','slide-up','slide-left','slide-right','zoom-in','bounce','pulse','glow','shake'].map(a => (
-                        <option key={a} value={a}>{a}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={ev.pauseVideo}
-                      onChange={e => updateEvent(ev.id, { pauseVideo: e.target.checked })}
-                      className="accent-indigo-500" />
-                    <span className="text-sm text-gray-300">Pause video when shown</span>
-                  </label>
+                  <button onClick={e => { e.stopPropagation(); deleteEvent(ev.id); }}
+                    className="text-gray-600 hover:text-red-400 text-sm">&#x2715;</button>
                 </div>
-              )}
-            </div>
-          ))}
-        </div>
+
+                {selectedEventId === ev.id && (
+                  <div className="px-4 pb-4 space-y-3" onClick={e => e.stopPropagation()}>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Button text</label>
+                      <input value={ev.cta.text}
+                        onChange={e => updateCta(ev.id, { text: e.target.value })}
+                        className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-xs text-gray-400 block mb-1">Timestamp (s)</label>
+                        <input type="number" min={0} step={0.1} value={ev.timestamp}
+                          onChange={e => updateEvent(ev.id, { timestamp: parseFloat(e.target.value) })}
+                          className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-400 block mb-1">Duration (s)</label>
+                        <input type="number" min={0.3} max={30} step={0.1} value={ev.duration}
+                          onChange={e => updateEvent(ev.id, { duration: parseFloat(e.target.value) })}
+                          className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Position <span className="text-gray-600">(drag in preview)</span></label>
+                      <div className="flex gap-2 text-xs text-gray-300 font-mono bg-gray-800 rounded px-2 py-1.5 border border-gray-700">
+                        <span>x: {ev.cta.position.x}%</span>
+                        <span className="text-gray-600">·</span>
+                        <span>y: {ev.cta.position.y}%</span>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Style</label>
+                      <select value={ev.cta.style}
+                        onChange={e => updateCta(ev.id, { style: e.target.value as ButtonStyle })}
+                        className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm">
+                        {['primary','secondary','floating','pulse','glow','slide-in','bounce','glass'].map(s => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Size</label>
+                      <div className="flex gap-2">
+                        {(['small','medium','large'] as const).map(sz => (
+                          <button key={sz} onClick={() => updateCta(ev.id, { size: sz })}
+                            className={`flex-1 text-xs py-1 rounded transition-colors ${ev.cta.size === sz ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>
+                            {sz}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Animation</label>
+                      <select value={ev.animation}
+                        onChange={e => updateEvent(ev.id, { animation: e.target.value as AnimationType })}
+                        className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm">
+                        {['fade-in','slide-up','slide-left','slide-right','zoom-in','bounce','pulse','glow','shake'].map(a => (
+                          <option key={a} value={a}>{a}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={ev.pauseVideo}
+                        onChange={e => updateEvent(ev.id, { pauseVideo: e.target.checked })}
+                        className="accent-indigo-500" />
+                      <span className="text-sm text-gray-300">Pause video when shown</span>
+                    </label>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Layers tab */}
+        {activeTab === 'layers' && (
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {selectedLayer ? (
+              <>
+                <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-800 bg-gray-800/50">
+                  <button
+                    onClick={() => setSelectedLayerId(null)}
+                    className="text-xs text-gray-400 hover:text-white"
+                  >
+                    ← All layers
+                  </button>
+                  <span className="text-xs text-gray-500 truncate flex-1">{selectedLayer.name}</span>
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                  <LayerPropertiesPanel
+                    layer={selectedLayer}
+                    onUpdate={patch => updateLayer(selectedLayer.id, patch)}
+                  />
+                </div>
+              </>
+            ) : (
+              <div className="flex-1 overflow-hidden">
+                <LayerPanel
+                  layers={layers}
+                  selectedId={selectedLayerId}
+                  onSelect={id => setSelectedLayerId(id)}
+                  onAdd={(type: LayerType) => addLayer(type)}
+                  onUpdate={(id, patch) => updateLayer(id, patch)}
+                  onRemove={id => removeLayer(id)}
+                  onDuplicate={id => duplicateLayer(id)}
+                  onReorder={ids => reorderLayers(ids)}
+                />
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

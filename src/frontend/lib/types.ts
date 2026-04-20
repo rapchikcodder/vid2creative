@@ -70,6 +70,88 @@ export interface TimelineEvent {
   pauseVideo: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Layer system (v3.0)
+// ---------------------------------------------------------------------------
+
+export type LayerType = 'image' | 'text' | 'tutorial' | 'progress' | 'effect' | 'shape';
+
+export interface TextLayerData {
+  kind: 'text';
+  text: string;
+  fontSize: number;
+  fontColor: string;
+  fontFamily: string;
+  bold: boolean;
+  italic: boolean;
+  textAlign: 'left' | 'center' | 'right';
+  backgroundColor?: string;
+}
+
+export interface ImageLayerData {
+  kind: 'image';
+  src: string;
+  alt?: string;
+  objectFit: 'contain' | 'cover' | 'fill';
+}
+
+export interface TutorialLayerData {
+  kind: 'tutorial';
+  assetId: string;
+  assetUrl: string;
+}
+
+export interface ProgressLayerData {
+  kind: 'progress';
+  barType: 'linear' | 'circular';
+  color: string;
+  backgroundColor: string;
+  fillPercent: number;
+}
+
+export interface EffectLayerData {
+  kind: 'effect';
+  assetId: string;
+  assetUrl: string;
+  loop: boolean;
+}
+
+export interface ShapeLayerData {
+  kind: 'shape';
+  shape: 'rectangle' | 'circle' | 'triangle';
+  fillColor: string;
+  borderColor?: string;
+  borderWidth: number;
+  borderRadius?: number;
+}
+
+export type LayerData =
+  | TextLayerData
+  | ImageLayerData
+  | TutorialLayerData
+  | ProgressLayerData
+  | EffectLayerData
+  | ShapeLayerData;
+
+export interface Layer {
+  id: string;
+  type: LayerType;
+  name: string;
+  visible: boolean;
+  locked: boolean;
+  position: { x: number; y: number };      // % of creative width/height
+  size: { width: number; height: number }; // % of creative width/height
+  rotation: number;
+  opacity: number;
+  zIndex: number;
+  showAt?: number;    // timestamp in seconds — undefined = always visible
+  hideAt?: number;
+  animation?: AnimationType;
+  data: LayerData;
+}
+
+// ---------------------------------------------------------------------------
+
 export interface CreativeConfig {
   width: number;
   height: number;
@@ -80,6 +162,7 @@ export interface CreativeConfig {
   backgroundColor: string;
   clickThroughUrl: string;
   timeline: TimelineEvent[];
+  layers: Layer[];
   focusX?: number;           // horizontal focus point (0-100%) from ML motion centroid
 }
 

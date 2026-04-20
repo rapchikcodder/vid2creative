@@ -1,10 +1,16 @@
 """
 Tests for scene boundary detection.
 Full tests require a fixture video — unit tests mock the scenedetect output.
+
+scenedetect is only installed inside the Docker container (see requirements.txt).
+All tests here are skipped automatically when the package is not available locally.
 """
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+
+# Skip entire module if scenedetect isn't installed (local dev without Docker)
+pytest.importorskip("scenedetect", reason="scenedetect not installed (Docker-only dependency)")
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SAMPLE_VIDEO = FIXTURES / "sample.mp4"

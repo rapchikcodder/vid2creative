@@ -41,6 +41,7 @@ export default function VideoUploader({ onComplete }: Props) {
         backgroundColor: '#000000',
         clickThroughUrl: '',
         timeline: [],
+        layers: [],
       },
     };
     onComplete(file, session);

@@ -12,13 +12,19 @@ Three signals extracted from optical flow:
    direction (character walking, camera panning). Direction entropy measures
    how spread out the motion directions are across the frame.
 
+   BACKGROUND SUBTRACTION: Direction entropy and coverage are computed on
+   *residual* flow (raw flow minus the global mean vector). This cancels
+   uniform camera pan / background scroll (e.g. side-scrollers like Subway
+   Surfer where the entire background moves right), so only local/character
+   motion contributes to the score.
+
 Final score = 0.20 * magnitude + 0.20 * variance + 0.40 * direction_entropy + 0.20 * coverage
 
 This correctly scores:
   - Character fighting  -> high mag, high var, HIGH entropy -> ~0.9
   - Explosion/ability   -> high mag, high var, HIGH entropy -> ~0.85
   - Character walking   -> mid mag, LOW var, LOW entropy   -> ~0.25
-  - Camera pan          -> mid mag, LOW var, LOW entropy   -> ~0.15
+  - Camera pan / scroll -> mid mag, LOW residual entropy   -> ~0.15
   - Menu/idle           -> low mag, low var, low entropy    -> ~0.05
 """
 import cv2
@@ -106,11 +112,20 @@ def compute_optical_flow_scores(frames: list[ExtractedFrame]) -> tuple[list[Extr
             poly_sigma=1.2,
             flags=0,
         )
-        mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1], angleInDegrees=True)
+        mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1], angleInDegrees=True)
         mags.append(float(np.mean(mag)))
         vars_.append(float(np.var(mag)))
-        entropies.append(_direction_entropy(ang, mag))
-        coverages.append(_flow_coverage(mag))
+
+        # Background motion subtraction: subtract the global mean flow vector
+        # so uniform camera pan / background scroll is cancelled.
+        # Direction entropy and coverage are computed on the residual (local motion only).
+        mean_u = float(np.mean(flow[..., 0]))
+        mean_v = float(np.mean(flow[..., 1]))
+        residual_u = flow[..., 0] - mean_u
+        residual_v = flow[..., 1] - mean_v
+        mag_residual, ang_residual = cv2.cartToPolar(residual_u, residual_v, angleInDegrees=True)
+        entropies.append(_direction_entropy(ang_residual, mag_residual))
+        coverages.append(_flow_coverage(mag_residual))
 
         # Accumulate horizontal centroid of CHARACTER motion only.
         # Only use top 25% strongest motion pixels — filters out diffuse

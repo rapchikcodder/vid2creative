@@ -1,4 +1,4 @@
-import { CreativeConfig, TimelineEvent, CTAButton, OverlayElement, AnimationType } from '../types';
+import { CreativeConfig, TimelineEvent, CTAButton, OverlayElement, AnimationType, Layer } from '../types';
 
 function escapeHtml(str: string): string {
   return str
@@ -44,6 +44,98 @@ function buildTimelineCtaHtml(event: TimelineEvent, clickUrl: string): string {
   return html;
 }
 
+/**
+ * Renders a Layer as an inline-styled HTML element for export.
+ */
+export function buildLayerHtml(layer: Layer, creativeWidth: number, creativeHeight: number): string {
+  if (!layer.visible) return '';
+
+  const left = (layer.position.x / 100) * creativeWidth;
+  const top  = (layer.position.y / 100) * creativeHeight;
+  const w    = (layer.size.width / 100) * creativeWidth;
+  const h    = (layer.size.height / 100) * creativeHeight;
+
+  const showAttr = layer.showAt !== undefined ? ` data-show-at="${layer.showAt.toFixed(1)}"` : '';
+  const hideAttr = layer.hideAt !== undefined ? ` data-hide-at="${layer.hideAt.toFixed(1)}"` : '';
+  const animAttr = layer.animation ? ` data-anim="${layer.animation}"` : '';
+  const timedAttrs = showAttr + hideAttr + animAttr;
+  const isTimed = layer.showAt !== undefined || layer.hideAt !== undefined;
+
+  const baseStyle = [
+    `position:absolute`,
+    `left:${left.toFixed(1)}px`,
+    `top:${top.toFixed(1)}px`,
+    `width:${w.toFixed(1)}px`,
+    `height:${h.toFixed(1)}px`,
+    `transform:rotate(${layer.rotation}deg)`,
+    `opacity:${layer.opacity}`,
+    `z-index:${layer.zIndex + 10}`,
+    `overflow:hidden`,
+    `pointer-events:none`,
+    isTimed ? 'display:none' : '',
+  ].filter(Boolean).join(';');
+
+  const { data } = layer;
+
+  if (data.kind === 'text') {
+    const style = [
+      baseStyle,
+      `display:flex`,
+      `align-items:center`,
+      `justify-content:${data.textAlign === 'left' ? 'flex-start' : data.textAlign === 'right' ? 'flex-end' : 'center'}`,
+      `box-sizing:border-box`,
+      `padding:4px 8px`,
+      data.backgroundColor ? `background:${escapeHtml(data.backgroundColor)}` : '',
+    ].filter(Boolean).join(';');
+    const textStyle = [
+      `font-size:${data.fontSize}px`,
+      `color:${escapeHtml(data.fontColor)}`,
+      `font-family:${escapeHtml(data.fontFamily)}`,
+      data.bold ? 'font-weight:bold' : '',
+      data.italic ? 'font-style:italic' : '',
+      `text-align:${data.textAlign}`,
+      'width:100%',
+      'word-break:break-word',
+    ].filter(Boolean).join(';');
+    return `      <div class="layer-el" style="${style}"${timedAttrs}><span style="${textStyle}">${escapeHtml(data.text)}</span></div>`;
+  }
+
+  if (data.kind === 'image') {
+    if (!data.src) return '';
+    return `      <img class="layer-el" src="${escapeHtml(data.src)}" alt="${escapeHtml(data.alt ?? '')}" style="${baseStyle};object-fit:${data.objectFit}"${timedAttrs}>`;
+  }
+
+  if (data.kind === 'tutorial' || data.kind === 'effect') {
+    if (!data.assetUrl) return '';
+    return `      <img class="layer-el" src="${escapeHtml(data.assetUrl)}" alt="${escapeHtml(layer.name)}" style="${baseStyle};object-fit:contain"${timedAttrs}>`;
+  }
+
+  if (data.kind === 'progress') {
+    if (data.barType === 'linear') {
+      return `      <div class="layer-el" style="${baseStyle};background:${escapeHtml(data.backgroundColor)};border-radius:4px"${timedAttrs}><div style="width:${data.fillPercent}%;height:100%;background:${escapeHtml(data.color)};border-radius:4px"></div></div>`;
+    }
+    const r = 40;
+    const circ = 2 * Math.PI * r;
+    const stroke = circ * (1 - data.fillPercent / 100);
+    return `      <div class="layer-el" style="${baseStyle};display:flex;align-items:center;justify-content:center"${timedAttrs}><svg viewBox="0 0 100 100" width="${w}" height="${h}"><circle cx="50" cy="50" r="${r}" fill="none" stroke="${escapeHtml(data.backgroundColor)}" stroke-width="10"/><circle cx="50" cy="50" r="${r}" fill="none" stroke="${escapeHtml(data.color)}" stroke-width="10" stroke-dasharray="${circ.toFixed(2)}" stroke-dashoffset="${stroke.toFixed(2)}" transform="rotate(-90 50 50)"/></svg></div>`;
+  }
+
+  if (data.kind === 'shape') {
+    if (data.shape === 'triangle') {
+      const triStyle = `width:0;height:0;border-left:${(w / 2).toFixed(1)}px solid transparent;border-right:${(w / 2).toFixed(1)}px solid transparent;border-bottom:${h.toFixed(1)}px solid ${escapeHtml(data.fillColor)}`;
+      return `      <div class="layer-el" style="${baseStyle};background:transparent"${timedAttrs}><div style="${triStyle}"></div></div>`;
+    }
+    const shapeExtra = [
+      `background:${escapeHtml(data.fillColor)}`,
+      data.borderColor ? `border:${data.borderWidth}px solid ${escapeHtml(data.borderColor)}` : '',
+      data.shape === 'circle' ? 'border-radius:50%' : (data.borderRadius ? `border-radius:${data.borderRadius}px` : ''),
+    ].filter(Boolean).join(';');
+    return `      <div class="layer-el" style="${baseStyle};${shapeExtra}"${timedAttrs}></div>`;
+  }
+
+  return '';
+}
+
 export function generateCreativeHtml(config: CreativeConfig, videoUrl: string, posterFrameUrl: string): string {
   // Smart crop: center on character using ML-detected focus point
   const focusX = config.focusX ?? 50;
@@ -65,6 +157,23 @@ export function generateCreativeHtml(config: CreativeConfig, videoUrl: string, p
   for (const ev of config.timeline.filter(e => e.frameIndex !== config.posterFrameIndex)) {
     timelineCtas += buildTimelineCtaHtml(ev, config.clickThroughUrl);
   }
+
+  // Build layer HTML
+  const layers = config.layers ?? [];
+  const sortedLayers = [...layers].sort((a, b) => a.zIndex - b.zIndex);
+  let layersHtml = '';
+  for (const layer of sortedLayers) {
+    const html = buildLayerHtml(layer, config.width, config.height);
+    if (html) layersHtml += html + '\n';
+  }
+
+  // Timed layer JS: show/hide layers by video timestamp
+  const hasTimedLayers = layers.some(l => l.showAt !== undefined || l.hideAt !== undefined);
+  const layerTimingScript = hasTimedLayers
+    ? `\nvar lays=document.querySelectorAll('.layer-el[data-show-at]');`
+    + `\nfunction updateLayers(c){lays.forEach(function(el){var s=parseFloat(el.dataset.showAt||'0'),h=parseFloat(el.dataset.hideAt||'9999'),an=el.dataset.anim||'fade-in';if(c>=s&&c<h){if(el.style.display==='none'){el.style.display='';el.classList.add('anim-'+an);}}else if(c<s||c>=h){el.style.display='none';el.classList.remove('anim-'+an);}});}`
+    : '';
+  const layerTimingHook = hasTimedLayers ? '\n      updateLayers(c);' : '';
 
   const mutedAttr = config.muteByDefault ? 'muted' : '';
   const loopAttr = config.loopVideo ? 'loop' : '';
@@ -136,11 +245,14 @@ ${posterCtas}
     <div id="timeline-overlays" style="display:none">
 ${timelineCtas}
     </div>
+    <div id="layer-overlays">
+${layersHtml}
+    </div>
   </div>
   <script>
 (function(){
 var v=document.getElementById('video'),p=document.getElementById('poster'),t=document.getElementById('timeline-overlays'),r=false,paused=false;
-var o=t?Array.from(t.querySelectorAll('[data-show-at]')):[];
+var o=t?Array.from(t.querySelectorAll('[data-show-at]')):[];${layerTimingScript}
 function doAction(el,e){
   var a=el.dataset.action;
   if(!a||a==='link')return;
@@ -174,7 +286,7 @@ document.getElementById('creative').addEventListener('click',function(e){
           el.classList.remove('visible');el.style.opacity='0';
           el.className=el.className.replace(/anim-\\S+/g,'');
         }
-      });
+      });${layerTimingHook}
     });
   }else if(e.target.closest('.cta-btn')){
     var cb=e.target.closest('.cta-btn');

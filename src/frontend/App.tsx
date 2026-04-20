@@ -34,6 +34,7 @@ const DEFAULT_CONFIG: CreativeConfig = {
   backgroundColor: '#000000',
   clickThroughUrl: '',
   timeline: [],
+  layers: [],
 };
 
 export default function App() {

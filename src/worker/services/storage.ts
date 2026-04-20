@@ -13,6 +13,7 @@ function defaultConfig(): CreativeConfig {
     backgroundColor: '#000000',
     clickThroughUrl: '',
     timeline: [],
+    layers: [],
   };
 }
 

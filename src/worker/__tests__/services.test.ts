@@ -132,6 +132,7 @@ describe('storage.ts', () => {
           backgroundColor: '#000000',
           clickThroughUrl: '',
           timeline: [],
+          layers: [],
         },
       };
       kv(env).get.mockResolvedValue(JSON.stringify(session));
@@ -163,6 +164,7 @@ describe('storage.ts', () => {
           backgroundColor: '#000000',
           clickThroughUrl: '',
           timeline: [],
+          layers: [],
         },
       };
 
@@ -368,6 +370,7 @@ describe('html-generator.ts', () => {
       backgroundColor: '#000000',
       clickThroughUrl: 'https://example.com',
       timeline: [],
+      layers: [],
       ...overrides,
     };
   }
