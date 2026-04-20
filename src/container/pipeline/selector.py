@@ -46,8 +46,10 @@ def calculate_adaptive_gap(motion_scores: list[float], base_gap: float = 1.5) ->
     return base_gap * 1.3       # ~2.0s
 
 
-def calculate_adaptive_threshold(cv_confidences: list[float], target_percentile: float = 0.65) -> float:
-    """65th-percentile threshold = keep top 35%; floor at 0.01 to avoid dropping all frames."""
+def calculate_adaptive_threshold(cv_confidences: list[float], target_percentile: float = 0.35) -> float:
+    """Keep top 35% of frames as action.
+    Index at 35% through the descending list gives the score above which 35% of frames lie.
+    Floor at 0.01 to avoid dropping all frames on truly static videos."""
     if not cv_confidences:
         return 0.35
     sorted_scores = sorted(cv_confidences, reverse=True)
@@ -64,6 +66,26 @@ def add_multi_scale_scores(frames: list[ExtractedFrame]) -> None:
         frame.multi_scale_score = round(
             0.50 * window_avg(0.5) + 0.30 * window_avg(1.5) + 0.20 * window_avg(4.0), 4
         )
+
+
+def _normalize_cv_confidence(frames: list[ExtractedFrame]) -> None:
+    """Rank-based normalization: assigns rank/(N-1) to each frame.
+
+    Scores are uniformly distributed in [0, 1] regardless of the raw distribution.
+    This ensures the sensitivity slider is always linear for every game genre:
+      - slider at 0.65 → always shows top ~35% of frames
+      - slider at 0.45 → always shows top ~55% of frames
+
+    Min-max was insufficient for Subway Surfer / endless-runners: all frames
+    genuinely have high motion relative to each other, so after min-max they still
+    cluster at 0.5–0.8 and the slider does nothing below 0.7.
+    """
+    if not frames:
+        return
+    sorted_frames = sorted(frames, key=lambda f: f.cv_confidence)
+    n = len(sorted_frames)
+    for rank, frame in enumerate(sorted_frames):
+        frame.cv_confidence = round(rank / max(n - 1, 1), 4)
 
 
 def segment_based_selection(
@@ -170,6 +192,11 @@ def _score_all_frames(
             4,
         )
 
+    # === Pass 6: Relative normalization ===
+    # Makes scores discriminative regardless of genre.
+    # Subway Surfer / endless-runners would otherwise bunch all frames at 0.56-0.78.
+    _normalize_cv_confidence(frames)
+
 
 def select_best_candidates(
     frames: list[ExtractedFrame],
@@ -200,6 +227,8 @@ def select_best_candidates(
             + 0.05 * frame.temporal_score,
             4,
         )
+    # Re-normalize after reweighting (overwrites Pass 6 from _score_all_frames)
+    _normalize_cv_confidence(frames)
 
     # Adaptive frame count and gap based on video characteristics
     duration = frames[-1].timestamp if frames else 0.0
@@ -277,12 +306,12 @@ def detect_all_actions(
     add_multi_scale_scores(frames)
 
     # Compute percentile-based adaptive threshold.
-    # Use the more lenient of: caller-supplied threshold vs. percentile.
-    # This guarantees ~top-35% are always captured even on low-motion videos,
-    # while preserving caller intent when their threshold is lower.
+    # Use the STRICTER of: caller-supplied threshold vs. percentile.
+    # This prevents Subway Surfer / endless-runners from marking every frame as action.
+    # max() ensures the threshold can only go UP (top 35% cutoff), never down.
     cv_confidences = [f.cv_confidence for f in frames]
     percentile_threshold = calculate_adaptive_threshold(cv_confidences)
-    effective_threshold = min(action_threshold, percentile_threshold)
+    effective_threshold = max(action_threshold, percentile_threshold)
     logger.info(
         "detect_all_actions: caller=%.3f percentile=%.3f effective=%.3f",
         action_threshold, percentile_threshold, effective_threshold,
