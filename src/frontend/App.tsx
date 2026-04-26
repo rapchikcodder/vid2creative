@@ -37,6 +37,13 @@ const DEFAULT_CONFIG: CreativeConfig = {
   layers: [],
 };
 
+const STEPS: { key: Step; label: string; num: string }[] = [
+  { key: 'upload',  label: 'Upload',  num: '01' },
+  { key: 'extract', label: 'Analyze', num: '02' },
+  { key: 'edit',    label: 'Edit',    num: '03' },
+  { key: 'export',  label: 'Export',  num: '04' },
+];
+
 export default function App() {
   const [step, setStep] = useState<Step>('upload');
   const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -52,8 +59,6 @@ export default function App() {
 
   function handleAnalysisComplete(analyzedFrames: ExtractedFrame[], focusX?: number) {
     setFrames(analyzedFrames);
-
-    // Build initial timeline from selected frames (2.5s pre-offset)
     const events: TimelineEvent[] = analyzedFrames
       .filter(f => f.isSelected)
       .map((f) => ({
@@ -82,80 +87,114 @@ export default function App() {
     pushConfig(next);
   }
 
-  const STEPS: { key: Step; label: string; num: number }[] = [
-    { key: 'upload', label: 'Upload', num: 1 },
-    { key: 'extract', label: 'Analyze', num: 2 },
-    { key: 'edit', label: 'Edit', num: 3 },
-    { key: 'export', label: 'Export', num: 4 },
-  ];
-
   const stepIdx = STEPS.findIndex(s => s.key === step);
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white flex flex-col">
-      {/* Header */}
-      <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-sm font-bold">v2</div>
-          <span className="text-lg font-semibold tracking-tight">vid2creative</span>
-        </div>
-        {/* Step indicator */}
-        <div className="flex items-center gap-2">
-          {STEPS.map((s, i) => (
-            <React.Fragment key={s.key}>
-              {i > 0 && <div className="w-8 h-px bg-gray-700" />}
-              <div
-                className={`flex items-center gap-1.5 text-sm ${i <= stepIdx ? 'text-white' : 'text-gray-600'} ${i < stepIdx ? 'cursor-pointer hover:opacity-80' : ''}`}
-                onClick={() => { if (i < stepIdx) setStep(STEPS[i].key); }}
-              >
-                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold
-                  ${i < stepIdx ? 'bg-indigo-600' : i === stepIdx ? 'bg-indigo-500 ring-2 ring-indigo-300' : 'bg-gray-800'}`}>
-                  {i < stepIdx ? '✓' : s.num}
-                </div>
-                <span className="hidden sm:inline">{s.label}</span>
-              </div>
-            </React.Fragment>
-          ))}
-        </div>
-      </header>
+    <>
+      <div className="noise" />
+      <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
+        {/* Header */}
+        <header style={{
+          borderBottom: '1px solid var(--border)',
+          padding: '0 24px',
+          height: 52,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          background: 'var(--bg-1)',
+          flexShrink: 0,
+        }}>
+          {/* Logo */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span className="logo-dot" />
+            <span className="logo-mark">vid2creative</span>
+          </div>
 
-      {/* Main content */}
-      <main className="flex-1 overflow-auto">
-        {step === 'upload' && (
-          <VideoUploader onComplete={handleUploadComplete} />
-        )}
-        {step === 'extract' && session && videoFile && (
-          <FrameExtractor
-            session={session}
-            videoFile={videoFile}
-            onComplete={handleAnalysisComplete}
-          />
-        )}
-        {step === 'edit' && session && videoFile && (
-          <OverlayEditor
-            videoFile={videoFile}
-            frames={frames}
-            config={config}
-            onConfigChange={handleConfigChange}
-            onUndo={undoConfig}
-            onRedo={redoConfig}
-            canUndo={canUndo}
-            canRedo={canRedo}
-            onBack={() => setStep('extract')}
-            onNext={() => setStep('export')}
-          />
-        )}
-        {step === 'export' && session && (
-          <ExportPanel
-            session={session}
-            videoFile={videoFile!}
-            frames={frames}
-            config={config}
-            onConfigChange={handleConfigChange}
-            onBack={() => setStep('edit')}
-          />
-        )}
-      </main>
-    </div>
+          {/* Step indicator */}
+          <div className="step-bar">
+            {STEPS.map((s, i) => (
+              <React.Fragment key={s.key}>
+                {i > 0 && <div className={`step-connector ${i <= stepIdx ? 'done' : ''}`} />}
+                <div
+                  className={`step-node ${i === stepIdx ? 'active' : i < stepIdx ? 'done' : ''}`}
+                  style={{ cursor: i < stepIdx ? 'pointer' : 'default' }}
+                  onClick={() => { if (i < stepIdx) setStep(STEPS[i].key); }}
+                >
+                  <div className="step-num">
+                    {i < stepIdx ? '✓' : s.num}
+                  </div>
+                  <span className="step-label" style={{ display: window.innerWidth < 640 ? 'none' : undefined }}>
+                    {s.label}
+                  </span>
+                </div>
+              </React.Fragment>
+            ))}
+          </div>
+
+          {/* Right side: file info or spacer */}
+          <div style={{ width: 120, display: 'flex', justifyContent: 'flex-end' }}>
+            {videoFile && (
+              <span style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 10,
+                color: 'var(--text-3)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                maxWidth: 120,
+              }}>
+                {videoFile.name}
+              </span>
+            )}
+          </div>
+        </header>
+
+        {/* Main content */}
+        <main style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
+          {step === 'upload' && (
+            <div key="upload" className="step-enter">
+              <VideoUploader onComplete={handleUploadComplete} />
+            </div>
+          )}
+          {step === 'extract' && session && videoFile && (
+            <div key="extract" className="step-enter">
+              <FrameExtractor
+                session={session}
+                videoFile={videoFile}
+                onComplete={handleAnalysisComplete}
+              />
+            </div>
+          )}
+          {step === 'edit' && session && videoFile && (
+            <div key="edit" className="step-enter" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+              <OverlayEditor
+                videoFile={videoFile}
+                frames={frames}
+                config={config}
+                onConfigChange={handleConfigChange}
+                onUndo={undoConfig}
+                onRedo={redoConfig}
+                canUndo={canUndo}
+                canRedo={canRedo}
+                onBack={() => setStep('extract')}
+                onNext={() => setStep('export')}
+              />
+            </div>
+          )}
+          {step === 'export' && session && (
+            <div key="export" className="step-enter">
+              <ExportPanel
+                session={session}
+                videoFile={videoFile!}
+                frames={frames}
+                config={config}
+                onConfigChange={handleConfigChange}
+                onBack={() => setStep('edit')}
+              />
+            </div>
+          )}
+        </main>
+      </div>
+    </>
   );
 }

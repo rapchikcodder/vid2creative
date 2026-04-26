@@ -1,4 +1,4 @@
-import { CreativeConfig, TimelineEvent, CTAButton, OverlayElement, AnimationType, Layer } from '../types';
+import { CreativeConfig, TimelineEvent, CTAButton, OverlayElement, AnimationType, Layer, StartScreen } from '../types';
 
 function escapeHtml(str: string): string {
   return str
@@ -136,6 +136,26 @@ export function buildLayerHtml(layer: Layer, creativeWidth: number, creativeHeig
   return '';
 }
 
+function buildStartScreenHtml(ss: StartScreen): string {
+  if (!ss.enabled) return '';
+  const bg = ss.backgroundGradient
+    ? `linear-gradient(${escapeHtml(ss.backgroundGradient)})`
+    : escapeHtml(ss.backgroundColor);
+  const logoHtml = ss.logoSrc
+    ? `<img src="${escapeHtml(ss.logoSrc)}" style="width:${ss.logoSize}px;height:${ss.logoSize}px;object-fit:contain;border-radius:${Math.round(ss.logoSize * 0.2)}px;margin-bottom:4px">`
+    : '';
+  const subtextHtml = ss.subtext
+    ? `<p style="color:rgba(255,255,255,.7);font-size:13px;text-align:center;padding:0 24px;margin:0">${escapeHtml(ss.subtext)}</p>`
+    : '';
+  const logoFloat = ss.logoSrc ? `animation:ss-float 3s ease-in-out infinite;` : '';
+  return `    <div id="start-screen" style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:50;background:${bg};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;animation:ss-enter .6s ease both;transition:opacity .4s ease,transform .4s ease">
+      ${ss.logoSrc ? `<img src="${escapeHtml(ss.logoSrc)}" style="width:${ss.logoSize}px;height:${ss.logoSize}px;object-fit:contain;border-radius:${Math.round(ss.logoSize * 0.2)}px;margin-bottom:4px;${logoFloat}">` : ''}
+      <h1 style="color:#fff;font-family:-apple-system,sans-serif;font-size:22px;font-weight:800;text-align:center;padding:0 20px;margin:0;animation:ss-enter .6s ease .15s both">${escapeHtml(ss.headline)}</h1>
+      ${subtextHtml ? `<p style="color:rgba(255,255,255,.7);font-size:13px;text-align:center;padding:0 24px;margin:0;animation:ss-enter .6s ease .25s both">${escapeHtml(ss.subtext)}</p>` : ''}
+      <button id="start-cta" class="cta-btn ${escapeHtml(ss.ctaStyle)} large" style="position:relative;left:auto;top:auto;transform:none;opacity:1;margin-top:8px;animation:ss-enter .6s ease .35s both,cta-ready-pulse 2s ease-in-out .8s infinite">${escapeHtml(ss.ctaText)}</button>
+    </div>`;
+}
+
 export function generateCreativeHtml(config: CreativeConfig, videoUrl: string, posterFrameUrl: string): string {
   // Smart crop: center on character using ML-detected focus point
   const focusX = config.focusX ?? 50;
@@ -157,6 +177,10 @@ export function generateCreativeHtml(config: CreativeConfig, videoUrl: string, p
   for (const ev of config.timeline.filter(e => e.frameIndex !== config.posterFrameIndex)) {
     timelineCtas += buildTimelineCtaHtml(ev, config.clickThroughUrl);
   }
+
+  // Build start screen HTML
+  const startScreenHtml = config.startScreen ? buildStartScreenHtml(config.startScreen) : '';
+  const hasStartScreen = !!(config.startScreen?.enabled);
 
   // Build layer HTML
   const layers = config.layers ?? [];
@@ -182,7 +206,9 @@ export function generateCreativeHtml(config: CreativeConfig, videoUrl: string, p
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+  <meta name="ad.size" content="width=${config.width},height=${config.height}">
+  <!-- vid2creative | ${config.width}x${config.height} | ${config.timeline.length} CTAs | ${layers.length} layers -->
   <title>Interactive Creative</title>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
@@ -231,10 +257,19 @@ export function generateCreativeHtml(config: CreativeConfig, videoUrl: string, p
     .anim-pulse{animation:fade-in .4s ease forwards,pulse-glow 2s ease-in-out .4s infinite}
     .anim-glow{animation:fade-in .4s ease forwards,glow-pulse 2s ease-in-out .4s infinite}
     .anim-shake{animation:fade-in .4s ease forwards,shake .5s ease-in-out .4s 3}
+    @keyframes ss-enter{from{opacity:0;transform:scale(.95) translateY(8px)}to{opacity:1;transform:scale(1) translateY(0)}}
+    @keyframes ss-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+    @keyframes cta-ready-pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.03)}}
+    @keyframes ss-exit{to{opacity:0;transform:scale(1.02)}}
+    .cta-btn:hover{filter:brightness(1.15);transform:translate(-50%,-50%) scale(1.04)}
+    .cta-btn:active{transform:translate(-50%,-50%) scale(.97)}
+    .cta-btn.poster-cta:hover{transform:translate(-50%,-50%) scale(1.05)}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
   </style>
 </head>
 <body>
   <div class="creative" id="creative">
+${startScreenHtml}
     <video id="video" playsinline webkit-playsinline ${mutedAttr} ${loopAttr} preload="auto"${posterFrameUrl ? ` poster="${escapeHtml(posterFrameUrl)}"` : ''}>
       <source src="${escapeHtml(videoUrl)}" type="video/mp4">
     </video>
@@ -253,6 +288,26 @@ ${layersHtml}
 (function(){
 var v=document.getElementById('video'),p=document.getElementById('poster'),t=document.getElementById('timeline-overlays'),r=false,paused=false;
 var o=t?Array.from(t.querySelectorAll('[data-show-at]')):[];${layerTimingScript}
+var ss=document.getElementById('start-screen');
+function startPlay(){
+  r=true;p.classList.add('hidden');t.style.display='block';v.play();
+  v.addEventListener('timeupdate',function(){
+    var c=v.currentTime;
+    o.forEach(function(el){
+      var s=parseFloat(el.dataset.showAt),h=parseFloat(el.dataset.hideAt||'9999'),an=el.dataset.anim||'fade-in';
+      if(c>=s&&c<h){
+        if(!el.classList.contains('visible')){
+          el.classList.add('visible','anim-'+an);el.style.opacity='';
+          if(el.dataset.pause==='true'&&!paused){paused=true;v.pause();}
+        }
+      }else if(c>=h&&el.classList.contains('visible')){
+        el.classList.remove('visible');el.style.opacity='0';
+        el.className=el.className.replace(/anim-\S+/g,'');
+      }
+    });${layerTimingHook}
+  });
+}
+${hasStartScreen ? `if(ss){document.getElementById('start-cta').addEventListener('click',function(e){e.stopPropagation();ss.style.animation='ss-exit .35s ease forwards';setTimeout(function(){ss.style.display='none';},350);startPlay();});}` : ''}
 function doAction(el,e){
   var a=el.dataset.action;
   if(!a||a==='link')return;
@@ -271,23 +326,9 @@ t.addEventListener('click',function(e){
   if(btn)doAction(btn,e);
 });
 document.getElementById('creative').addEventListener('click',function(e){
+  if(ss&&ss.style.display!=='none')return;
   if(!r){
-    e.preventDefault();r=true;p.classList.add('hidden');t.style.display='block';v.play();
-    v.addEventListener('timeupdate',function(){
-      var c=v.currentTime;
-      o.forEach(function(el){
-        var s=parseFloat(el.dataset.showAt),h=parseFloat(el.dataset.hideAt||'9999'),an=el.dataset.anim||'fade-in';
-        if(c>=s&&c<h){
-          if(!el.classList.contains('visible')){
-            el.classList.add('visible','anim-'+an);el.style.opacity='';
-            if(el.dataset.pause==='true'&&!paused){paused=true;v.pause();}
-          }
-        }else if(c>=h&&el.classList.contains('visible')){
-          el.classList.remove('visible');el.style.opacity='0';
-          el.className=el.className.replace(/anim-\\S+/g,'');
-        }
-      });${layerTimingHook}
-    });
+    e.preventDefault();startPlay();
   }else if(e.target.closest('.cta-btn')){
     var cb=e.target.closest('.cta-btn');
     var hr=cb.getAttribute('href');
@@ -300,8 +341,9 @@ document.getElementById('creative').addEventListener('click',function(e){
 });
 v.addEventListener('ended',function(){
   if(!v.loop){
-    r=false;paused=false;p.classList.remove('hidden');t.style.display='none';
+    r=false;paused=false;t.style.display='none';
     o.forEach(function(el){el.classList.remove('visible');el.style.opacity='0';el.className=el.className.replace(/anim-\\S+/g,'');});
+    p.style.transition='opacity .5s ease';p.classList.remove('hidden');
   }
 });
 })();

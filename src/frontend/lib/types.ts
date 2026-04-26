@@ -152,6 +152,18 @@ export interface Layer {
 
 // ---------------------------------------------------------------------------
 
+export interface StartScreen {
+  enabled: boolean;
+  backgroundColor: string;
+  backgroundGradient?: string;  // CSS gradient e.g. "135deg, #6c5ce7, #a29bfe"
+  logoSrc?: string;             // base64 data URL
+  logoSize: number;             // 40–120px
+  headline: string;
+  subtext: string;
+  ctaText: string;
+  ctaStyle: ButtonStyle;
+}
+
 export interface CreativeConfig {
   width: number;
   height: number;
@@ -164,6 +176,8 @@ export interface CreativeConfig {
   timeline: TimelineEvent[];
   layers: Layer[];
   focusX?: number;           // horizontal focus point (0-100%) from ML motion centroid
+  videoUrl?: string;         // server-hosted URL set after upload, used by html-generator
+  startScreen?: StartScreen;
 }
 
 export interface Session {
@@ -231,13 +245,3 @@ export interface AnalyzedCandidate {
   animationSuggestion: AnimationType;
 }
 
-export interface ProcessResponse {
-  sessionId: string;
-  totalFramesExtracted: number;
-  sceneBoundaries: number;
-  candidates: AnalyzedCandidate[];
-  timeline: TimelineEvent[];
-  processingTimeMs: number;
-  cvProcessingTimeMs: number;
-  aiProcessingTimeMs: number;
-}

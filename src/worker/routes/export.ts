@@ -19,6 +19,14 @@ app.post('/', async (c) => {
   // Merge provided config with session config
   const config: CreativeConfig = { ...session.config, ...body.config };
 
+  // Validate dimensions
+  if (!config.width || !config.height || config.width < 1 || config.height < 1) {
+    throw new AppError('INVALID_CONFIG', 'Width and height must be positive numbers');
+  }
+  if (config.width > 4096 || config.height > 4096) {
+    throw new AppError('INVALID_CONFIG', 'Maximum dimension is 4096px');
+  }
+
   // Build absolute URLs so the exported HTML works as a standalone file
   const origin = new URL(c.req.url).origin;
   const videoUrl = `${origin}/api/files/${encodeURIComponent(session.videoKey)}`;

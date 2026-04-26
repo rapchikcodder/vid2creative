@@ -6,6 +6,12 @@ const MAX_ACTIONS = 10;
 const MIN_ACTION_GAP = 2.0;
 const DEFAULT_OVERLAY: OverlayElement = { type: 'none', text: '', position: 'top-right', visible: false };
 
+function ctaTextFor(actionType: string, sceneType: string): string {
+  if (sceneType === 'outro' || sceneType === 'end') return 'Install Now';
+  if (actionType === 'scene_change' || sceneType === 'cut') return 'Play Now';
+  return 'Tap to Play';
+}
+
 export function selectTopActions(
   allFrames: { index: number; timestamp: number }[],
   scores: ScoredFrame[],
@@ -67,7 +73,7 @@ export function mergeMLResults(
         isAction: true,
         actionType: mlFrame.near_scene_boundary ? 'scene_change' : 'high_motion',
         actionLabel: mlFrame.scene_type !== 'none' ? mlFrame.scene_type : 'action',
-        cta: { text: 'Play Now', position: { x: 50, y: 80 }, style: 'primary' as const, size: 'medium' as const, visible: true, action: 'link' as const },
+        cta: { text: ctaTextFor(mlFrame.near_scene_boundary ? 'scene_change' : 'high_motion', mlFrame.scene_type ?? 'none'), position: { x: 50, y: 80 }, style: 'primary' as const, size: 'medium' as const, visible: true, action: 'link' as const },
         overlay: DEFAULT_OVERLAY,
         animationSuggestion: 'fade-in' as AnimationType,
       } : undefined,

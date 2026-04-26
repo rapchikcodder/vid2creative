@@ -305,6 +305,19 @@ def detect_all_actions(
     _score_all_frames(frames, scene_boundaries, scene_proximity_window)
     add_multi_scale_scores(frames)
 
+    # Re-weight cv_confidence to include multi_scale_score, consistent with select_best_candidates.
+    for frame in frames:
+        frame.cv_confidence = round(
+            0.25 * frame.motion_score
+            + 0.20 * frame.multi_scale_score
+            + 0.25 * frame.clip_score
+            + 0.15 * frame.scene_proximity_score
+            + 0.10 * frame.motion_spike_score
+            + 0.05 * frame.temporal_score,
+            4,
+        )
+    _normalize_cv_confidence(frames)
+
     # Compute percentile-based adaptive threshold.
     # Use the STRICTER of: caller-supplied threshold vs. percentile.
     # This prevents Subway Surfer / endless-runners from marking every frame as action.

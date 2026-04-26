@@ -12,16 +12,14 @@ export default function VideoUploader({ onComplete }: Props) {
 
   function handleFile(file: File) {
     if (!file.type.startsWith('video/')) {
-      setError('Please select a video file (MP4, WebM)');
+      setError('Select a video file — MP4 or WebM');
       return;
     }
     if (file.size > 100 * 1024 * 1024) {
-      setError('File too large (max 100 MB)');
+      setError('File too large — max 100 MB');
       return;
     }
     setError(null);
-    // Skip server upload — video stays local until export.
-    // Generate a local session ID instantly.
     const localId = Math.random().toString(36).slice(2, 14);
     const session: Session = {
       id: localId,
@@ -32,16 +30,9 @@ export default function VideoUploader({ onComplete }: Props) {
       analyzedFrames: 0,
       status: 'ready',
       config: {
-        width: 360,
-        height: 640,
-        posterFrameIndex: 0,
-        autoplayAfterTap: true,
-        loopVideo: false,
-        muteByDefault: true,
-        backgroundColor: '#000000',
-        clickThroughUrl: '',
-        timeline: [],
-        layers: [],
+        width: 360, height: 640, posterFrameIndex: 0,
+        autoplayAfterTap: true, loopVideo: false, muteByDefault: true,
+        backgroundColor: '#000000', clickThroughUrl: '', timeline: [], layers: [],
       },
     };
     onComplete(file, session);
@@ -54,61 +45,134 @@ export default function VideoUploader({ onComplete }: Props) {
     if (file) handleFile(file);
   }
 
-  function onInputChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) handleFile(file);
-  }
-
   return (
-    <div className="flex flex-col items-center justify-center min-h-[calc(100vh-73px)] p-8">
-      <div className="w-full max-w-lg">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold mb-2">Upload your gameplay video</h1>
-          <p className="text-gray-400">MP4 or WebM, up to 100 MB. The AI will find the best action moments automatically.</p>
+    <div className="upload-bg-grid" style={{
+      minHeight: 'calc(100vh - 52px)',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '32px 24px',
+      background: 'var(--bg)',
+    }}>
+      <div className="upload-glow-orb" style={{ width: '100%', maxWidth: 520 }}>
+        {/* Headline */}
+        <div className="afu" style={{ textAlign: 'center', marginBottom: 36 }}>
+          <div className="text-gradient" style={{
+            fontFamily: 'var(--font-display)',
+            fontSize: 'clamp(28px, 5vw, 42px)',
+            fontWeight: 800,
+            letterSpacing: '-0.02em',
+            lineHeight: 1.1,
+            marginBottom: 12,
+          }}>
+            Drop your gameplay.
+          </div>
+          <div style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 12,
+            color: 'var(--text-2)',
+            letterSpacing: '0.04em',
+          }}>
+            MP4 or WebM · up to 100 MB · stays local until export
+          </div>
         </div>
 
+        {/* Drop zone */}
         <div
-          className={`border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all
-            ${dragging ? 'border-indigo-400 bg-indigo-950/30' : 'border-gray-700 hover:border-gray-500 bg-gray-900/50'}`}
+          className={`upload-zone upload-scan afu d1${dragging ? ' drag-over' : ''}`}
+          style={{ padding: '56px 32px', textAlign: 'center' }}
           onClick={() => inputRef.current?.click()}
           onDragOver={e => { e.preventDefault(); setDragging(true); }}
           onDragLeave={() => setDragging(false)}
           onDrop={onDrop}
+          data-drag={dragging ? 'true' : undefined}
         >
-          <div className="text-5xl mb-4">🎮</div>
-          <p className="text-lg font-medium mb-1">Drop video here</p>
-          <p className="text-gray-500 text-sm">or click to browse</p>
+          {/* Icon */}
+          <div className="upload-icon-float" style={{
+            width: 52,
+            height: 52,
+            borderRadius: 10,
+            border: '1px solid var(--border-2)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto 20px',
+            background: 'var(--bg-2)',
+            fontSize: 22,
+          }}>
+            🎬
+          </div>
+
+          <div style={{
+            fontFamily: 'var(--font-display)',
+            fontSize: 16,
+            fontWeight: 700,
+            color: dragging ? 'var(--accent)' : 'var(--text)',
+            marginBottom: 8,
+            transition: 'color 0.2s',
+          }}>
+            {dragging ? 'Release to upload' : 'Drag & drop here'}
+          </div>
+
+          <div style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 11,
+            color: 'var(--text-2)',
+            marginBottom: 20,
+          }}>
+            or click to browse files
+          </div>
+
+          <button
+            className="btn btn-primary"
+            style={{ fontSize: 11, padding: '8px 20px' }}
+            onClick={e => { e.stopPropagation(); inputRef.current?.click(); }}
+          >
+            Select File
+          </button>
         </div>
 
+        {/* Error */}
         {error && (
-          <div className="mt-4 p-3 bg-red-950 border border-red-800 rounded-lg text-red-300 text-sm">
+          <div className="afu error-shake" style={{
+            marginTop: 12,
+            padding: '10px 14px',
+            borderRadius: 6,
+            background: 'rgba(255,59,92,0.08)',
+            border: '1px solid rgba(255,59,92,0.2)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 11,
+            color: 'var(--danger)',
+          }}>
             {error}
           </div>
         )}
 
-        <input
-          ref={inputRef}
-          type="file"
-          accept="video/mp4,video/webm"
-          className="hidden"
-          onChange={onInputChange}
-        />
-
-        <div className="mt-8 grid grid-cols-3 gap-4 text-center text-sm text-gray-500">
-          <div>
-            <div className="text-2xl mb-1">🔍</div>
-            <p>Auto-detects action moments</p>
-          </div>
-          <div>
-            <div className="text-2xl mb-1">⚡</div>
-            <p>Server-side CV + AI analysis</p>
-          </div>
-          <div>
-            <div className="text-2xl mb-1">📦</div>
-            <p>Exports standalone HTML5 ad</p>
-          </div>
+        {/* Feature tags */}
+        <div className="afu d2" style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 8,
+          justifyContent: 'center',
+          marginTop: 28,
+        }}>
+          {['Optical Flow', 'Scene Detection', 'CV Scoring', 'HTML5 Export'].map((t, i) => (
+            <span key={t} className={`tag afu d${i + 3}`}>
+              <span className="tag-dot" />
+              {t}
+            </span>
+          ))}
         </div>
       </div>
+
+      <input
+        ref={inputRef}
+        type="file"
+        accept="video/mp4,video/webm"
+        style={{ display: 'none' }}
+        onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
+      />
     </div>
   );
 }

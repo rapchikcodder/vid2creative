@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { TEMPLATES, applyTemplate, type GameTemplate } from '../lib/templates';
 import type { CreativeConfig } from '../lib/types';
 
@@ -9,30 +9,42 @@ interface Props {
 }
 
 export default function TemplateSelector({ config, onApply, onClear }: Props) {
+  const [appliedId, setAppliedId] = useState<string | null>(null);
+
   function handleApply(template: GameTemplate) {
     onApply(applyTemplate(template, config));
+    setAppliedId(template.id);
+    setTimeout(() => setAppliedId(null), 1200);
   }
 
   return (
-    <div className="p-3 bg-gray-950 border-b border-gray-800">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Game Templates</span>
+    <div style={{ flex: 1, overflowY: 'auto' }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '8px 10px 4px',
+      }}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, letterSpacing: '.08em', color: 'var(--text-3)', textTransform: 'uppercase' }}>
+          {TEMPLATES.length} templates
+        </span>
         <button
           onClick={onClear}
-          className="text-xs text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded hover:bg-gray-800">
-          Clear Timeline
+          className="btn btn-ghost btn-sm"
+          style={{ fontSize: 9, padding: '3px 8px', color: 'var(--text-3)' }}
+        >
+          Clear
         </button>
       </div>
-      <div className="flex flex-wrap gap-1.5">
+      <div className="template-card-grid">
         {TEMPLATES.map(t => (
           <button
             key={t.id}
+            className={`template-card${appliedId === t.id ? ' applied' : ''}`}
             onClick={() => handleApply(t)}
-            className="flex items-center gap-1 bg-gray-800 hover:bg-indigo-900/60 border border-gray-700 hover:border-indigo-600 text-xs px-2 py-1 rounded-md transition-colors"
             title={`${t.genre} — ${t.events.length} CTAs`}
           >
-            <span>{t.icon}</span>
-            <span>{t.name}</span>
+            <span className="template-card-icon">{t.icon}</span>
+            <span className="template-card-name">{t.name}</span>
+            <span className="template-card-count">{t.events.length} CTAs</span>
           </button>
         ))}
       </div>

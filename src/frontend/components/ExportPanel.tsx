@@ -12,28 +12,29 @@ interface Props {
 }
 
 const PRESETS = [
-  { label: 'Unity Ads', width: 360, height: 640 },
-  { label: 'AppLovin', width: 320, height: 480 },
-  { label: 'Meta Story', width: 1080, height: 1920 },
-  { label: 'TikTok', width: 1080, height: 1920 },
-  { label: 'Landscape', width: 640, height: 360 },
-  { label: 'Square', width: 1080, height: 1080 },
-  { label: 'Banner', width: 300, height: 250 },
+  { label: 'Unity Ads',   width: 360,  height: 640  },
+  { label: 'AppLovin',    width: 320,  height: 480  },
+  { label: 'Meta Story',  width: 1080, height: 1920 },
+  { label: 'TikTok',      width: 1080, height: 1920 },
+  { label: 'Landscape',   width: 640,  height: 360  },
+  { label: 'Square',      width: 1080, height: 1080 },
+  { label: 'Banner',      width: 300,  height: 250  },
 ];
 
 export default function ExportPanel({ session, videoFile, frames, config, onConfigChange, onBack }: Props) {
-  const [exporting, setExporting] = useState(false);
-  const [previewing, setPreviewing] = useState(false);
+  const [exporting,   setExporting]   = useState(false);
+  const [previewing,  setPreviewing]  = useState(false);
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error,       setError]       = useState<string | null>(null);
   const [previewScale, setPreviewScale] = useState(1);
   const previewContainerRef = useRef<HTMLDivElement>(null);
+  const uploadedRef = useRef<{ sessionId: string; videoUrl: string } | null>(null);
 
   useEffect(() => {
     if (!previewHtml || !previewContainerRef.current) return;
     const { clientWidth, clientHeight } = previewContainerRef.current;
-    const scaleW = (clientWidth - 48) / config.width;
-    const scaleH = (clientHeight - 64) / config.height;
+    const scaleW = (clientWidth  - 80) / config.width;
+    const scaleH = (clientHeight - 80) / config.height;
     setPreviewScale(Math.min(1, scaleW, scaleH));
   }, [previewHtml, config.width, config.height]);
 
@@ -41,9 +42,7 @@ export default function ExportPanel({ session, videoFile, frames, config, onConf
     onConfigChange({ ...config, ...patch });
   }
 
-  const uploadedRef = useRef<{ sessionId: string; videoUrl: string } | null>(null);
-
-  async function ensureUploaded(): Promise<{ sessionId: string; videoUrl: string }> {
+  async function ensureUploaded() {
     if (uploadedRef.current) return uploadedRef.current;
     const result = await uploadVideo(videoFile);
     uploadedRef.current = result;
@@ -51,89 +50,107 @@ export default function ExportPanel({ session, videoFile, frames, config, onConf
   }
 
   async function handleExport() {
-    setExporting(true);
-    setError(null);
+    setExporting(true); setError(null);
     try {
       const { sessionId, videoUrl } = await ensureUploaded();
-      const exportConfig = { ...config, videoUrl };
-      const blob = await exportCreative(sessionId, exportConfig);
+      const blob = await exportCreative(sessionId, { ...config, videoUrl });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url;
-      a.download = `creative-${sessionId.slice(0, 8)}.html`;
-      a.click();
-      URL.revokeObjectURL(url);
+      a.href = url; a.download = `creative-${sessionId.slice(0, 8)}.html`;
+      a.click(); URL.revokeObjectURL(url);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Export failed');
-    } finally {
-      setExporting(false);
-    }
+    } finally { setExporting(false); }
   }
 
   async function handlePreview() {
-    setPreviewing(true);
-    setError(null);
+    setPreviewing(true); setError(null);
     try {
       const { sessionId, videoUrl } = await ensureUploaded();
-      const exportConfig = { ...config, videoUrl };
-      const blob = await exportCreative(sessionId, exportConfig);
-      const text = await blob.text();
-      setPreviewHtml(text);
+      const blob = await exportCreative(sessionId, { ...config, videoUrl });
+      setPreviewHtml(await blob.text());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Preview failed');
-    } finally {
-      setPreviewing(false);
-    }
+    } finally { setPreviewing(false); }
   }
 
+  const isPortrait = config.height > config.width;
+
   return (
-    <div className="flex h-[calc(100vh-73px)]">
-      {/* Left: config */}
-      <div className="w-80 flex flex-col bg-gray-900 border-r border-gray-800 overflow-auto">
-        <div className="p-5 border-b border-gray-800">
-          <h2 className="text-lg font-semibold">Export settings</h2>
-          <p className="text-sm text-gray-400 mt-1">{config.timeline.length} timeline events</p>
+    <div style={{ display: 'flex', height: 'calc(100vh - 52px)' }}>
+
+      {/* Left: settings */}
+      <div style={{
+        width: 296, flexShrink: 0,
+        background: 'var(--bg-1)', borderRight: '1px solid var(--border)',
+        display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 15, fontWeight: 700, color: 'var(--text)', marginBottom: 2 }}>
+            Export
+          </div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-2)' }}>
+            {config.timeline.length} timeline events · {config.width}×{config.height}
+          </div>
         </div>
 
-        <div className="p-5 space-y-5 flex-1 overflow-auto">
-          <div>
-            <label className="text-sm font-medium text-gray-300 block mb-2">Dimensions</label>
-            <div className="grid grid-cols-2 gap-2 mb-2">
-              {PRESETS.map(p => (
-                <button key={p.label} onClick={() => update({ width: p.width, height: p.height })}
-                  className={`text-sm py-2 px-3 rounded-lg transition-colors text-left
-                    ${config.width === p.width && config.height === p.height
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>
-                  <span className="font-medium">{p.label}</span>
-                  <span className="text-xs ml-1 opacity-70">{p.width}&times;{p.height}</span>
-                </button>
-              ))}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
+
+          {/* Dimensions */}
+          <div style={{ marginBottom: 20 }}>
+            <label className="label">Dimensions</label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5, marginBottom: 8 }}>
+              {PRESETS.map(p => {
+                const active = config.width === p.width && config.height === p.height;
+                return (
+                  <button key={p.label}
+                    className={`preset-dim-card${active ? ' active' : ''}`}
+                    onClick={() => update({ width: p.width, height: p.height })}
+                    style={{
+                      padding: '7px 8px', borderRadius: 5, border: '1px solid',
+                      borderColor: active ? 'var(--accent)' : 'var(--border-2)',
+                      background: active ? 'var(--accent-bg)' : 'var(--bg-2)',
+                      cursor: 'pointer', textAlign: 'left',
+                    }}
+                  >
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 600, color: active ? 'var(--accent)' : 'var(--text)' }}>
+                      {p.label}
+                    </div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-3)', marginTop: 1 }}>
+                      {p.width}×{p.height}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
-            <div className="flex gap-2 items-center">
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <input type="number" value={config.width}
                 onChange={e => update({ width: parseInt(e.target.value) })}
-                className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm" />
-              <span className="text-gray-500">&times;</span>
+                className="input" style={{ width: 72 }} />
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)' }}>×</span>
               <input type="number" value={config.height}
                 onChange={e => update({ height: parseInt(e.target.value) })}
-                className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm" />
+                className="input" style={{ width: 72 }} />
             </div>
           </div>
 
-          <div>
-            <label className="text-sm font-medium text-gray-300 block mb-2">Poster frame</label>
-            <div className="flex gap-2 overflow-x-auto pb-1">
-              {frames.slice(0, 20).map(f => (
+          {/* Poster frame */}
+          <div style={{ marginBottom: 20 }}>
+            <label className="label">Poster Frame</label>
+            <div style={{ display: 'flex', gap: 5, overflowX: 'auto', paddingBottom: 4 }}>
+              {frames.slice(0, 16).map(f => (
                 <div key={f.index}
-                  className={`flex-shrink-0 w-16 cursor-pointer rounded overflow-hidden border-2 transition-all
-                    ${config.posterFrameIndex === f.index ? 'border-indigo-400' : 'border-transparent'}`}
-                  onClick={() => update({ posterFrameIndex: f.index })}>
+                  onClick={() => update({ posterFrameIndex: f.index })}
+                  style={{
+                    flexShrink: 0, width: 44, borderRadius: 4, overflow: 'hidden', cursor: 'pointer',
+                    border: `1px solid ${config.posterFrameIndex === f.index ? 'var(--accent)' : 'transparent'}`,
+                    boxShadow: config.posterFrameIndex === f.index ? '0 0 6px var(--accent-glow)' : 'none',
+                  }}>
                   {f.thumbnailUrl ? (
-                    <img src={f.thumbnailUrl} alt={`Frame ${f.index}`} className="w-full aspect-video object-cover" />
+                    <img src={f.thumbnailUrl} alt={`${f.index}`} style={{ width: '100%', aspectRatio: '9/16', objectFit: 'cover', display: 'block' }} />
                   ) : (
-                    <div className="w-full aspect-video bg-gray-800 flex items-center justify-center text-xs text-gray-500">
-                      {f.timestamp.toFixed(1)}s
+                    <div style={{ width: '100%', aspectRatio: '9/16', background: 'var(--bg-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontSize: 8, color: 'var(--text-3)' }}>
+                      {f.timestamp.toFixed(0)}s
                     </div>
                   )}
                 </div>
@@ -141,78 +158,120 @@ export default function ExportPanel({ session, videoFile, frames, config, onConf
             </div>
           </div>
 
-          <div>
-            <label className="text-sm font-medium text-gray-300 block mb-1">Click-through URL</label>
+          {/* Click-through URL */}
+          <div style={{ marginBottom: 20 }}>
+            <label className="label">Click-through URL</label>
             <input value={config.clickThroughUrl}
               onChange={e => update({ clickThroughUrl: e.target.value })}
               placeholder="https://..."
-              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm" />
+              className="input" />
           </div>
 
-          <div>
-            <label className="text-sm font-medium text-gray-300 block mb-1">Background color</label>
-            <div className="flex gap-2 items-center">
+          {/* Background color */}
+          <div style={{ marginBottom: 20 }}>
+            <label className="label">Background Color</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input type="color" value={config.backgroundColor}
                 onChange={e => update({ backgroundColor: e.target.value })}
-                className="w-10 h-10 rounded border border-gray-700 bg-transparent cursor-pointer" />
-              <span className="text-sm text-gray-400">{config.backgroundColor}</span>
+                style={{
+                  width: 32, height: 32, padding: 2, borderRadius: 5,
+                  border: '1px solid var(--border-2)', background: 'transparent',
+                  cursor: 'pointer',
+                }} />
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-2)' }}>
+                {config.backgroundColor}
+              </span>
             </div>
           </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-300 block">Playback options</label>
-            {([['loopVideo', 'Loop video'], ['muteByDefault', 'Mute by default (required for autoplay)']] as const).map(([key, label]) => (
-              <label key={key} className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox"
-                  checked={Boolean(config[key as keyof CreativeConfig])}
-                  onChange={e => update({ [key]: e.target.checked } as Partial<CreativeConfig>)}
-                  className="accent-indigo-500" />
-                <span className="text-sm text-gray-300">{label}</span>
+          {/* Playback options */}
+          <div style={{ marginBottom: 20 }}>
+            <label className="label">Playback Options</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer' }}>
+                <input type="checkbox" checked={config.loopVideo}
+                  onChange={e => update({ loopVideo: e.target.checked })}  />
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-2)' }}>Loop video</span>
               </label>
-            ))}
+              <label style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer' }}>
+                <input type="checkbox" checked={config.muteByDefault}
+                  onChange={e => update({ muteByDefault: e.target.checked })} />
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-2)' }}>Mute by default</span>
+              </label>
+            </div>
           </div>
+
         </div>
 
-        <div className="p-5 border-t border-gray-800 space-y-2">
-          {error && <div className="text-red-400 text-sm mb-2">{error}</div>}
-          <button onClick={handlePreview} disabled={previewing}
-            className="w-full bg-gray-700 hover:bg-gray-600 text-white font-medium py-2.5 rounded-lg transition-colors disabled:opacity-50">
-            {previewing ? 'Loading…' : 'Preview'}
+        {/* Footer actions */}
+        <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {error && (
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--error)', padding: '6px 8px', background: 'var(--error-bg)', borderRadius: 4 }}>
+              {error}
+            </div>
+          )}
+          <button className="btn btn-ghost"
+            onClick={handlePreview} disabled={previewing}
+            style={{ width: '100%' }}>
+            {previewing ? (<><span className="spinner" style={{ width: 12, height: 12 }} /> Rendering...</>) : 'Preview'}
           </button>
-          <div className="flex gap-2">
-            <button onClick={onBack}
-              className="flex-none bg-gray-700 hover:bg-gray-600 text-white font-medium py-2.5 px-4 rounded-lg transition-colors">
-              ← Edit
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button className="btn btn-ghost" onClick={onBack} style={{ flex: 1 }}>
+              Back
             </button>
-            <button onClick={handleExport} disabled={exporting}
-              className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 rounded-lg transition-colors disabled:opacity-50">
-              {exporting ? 'Exporting…' : '⬇ Download HTML'}
+            <button className={`btn btn-primary${!exporting && previewHtml ? ' btn-export-ready' : ''}`}
+              onClick={handleExport} disabled={exporting}
+              style={{ flex: 2 }}>
+              {exporting ? (<><span className="spinner" style={{ width: 12, height: 12, borderTopColor: '#000' }} /> Generating...</>) : 'Download HTML'}
             </button>
           </div>
         </div>
       </div>
 
-      {/* Right: preview */}
-      <div ref={previewContainerRef} className="flex-1 flex items-center justify-center bg-gray-950 p-4 overflow-hidden">
-        {previewHtml ? (
-          <div className="flex flex-col items-center gap-4">
-            <div className="rounded-xl overflow-hidden shadow-2xl"
-              style={{ width: config.width, height: config.height, transform: `scale(${previewScale})`, transformOrigin: 'top center' }}>
+      {/* Right: preview pane */}
+      <div ref={previewContainerRef} className="export-preview-bg canvas-vignette" style={{
+        flex: 1, background: 'var(--bg-2)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        overflow: 'hidden', position: 'relative',
+      }}>
+        {previewing && !previewHtml ? (
+          <div style={{ textAlign: 'center' }}>
+            <div className="spinner spinner-lg" style={{ margin: '0 auto 12px' }} />
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-2)' }}>
+              Rendering creative…
+            </div>
+          </div>
+        ) : previewHtml ? (
+          <div className="scale-up" style={{
+            transform: `scale(${previewScale})`,
+            transformOrigin: 'center center',
+            flexShrink: 0,
+            position: 'relative', zIndex: 2,
+          }}>
+            <div className={isPortrait ? "phone-frame" : "phone-frame landscape"} style={{ width: config.width, height: config.height }}>
               <iframe
                 srcDoc={previewHtml}
-                style={{ width: config.width, height: config.height, border: 'none', display: 'block' }}
-                title="Creative preview"
+                style={{ width: '100%', height: '100%', border: 'none' }}
+                sandbox="allow-scripts"
+                title="Creative Preview"
               />
             </div>
-            <p className="text-sm text-gray-500" style={{ marginTop: config.height * (previewScale - 1) }}>
-              {config.width} &times; {config.height}px &middot; tap to play
-            </p>
           </div>
         ) : (
-          <div className="text-center text-gray-600">
-            <div className="text-5xl mb-3">&#x1F3AC;</div>
-            <p className="text-lg">Click Preview to see your creative</p>
-            <p className="text-sm mt-1">or Download HTML to get the export</p>
+          <div style={{ textAlign: 'center', position: 'relative', zIndex: 2 }}>
+            <div style={{
+              width: 48, height: 48, borderRadius: 10, border: '1px solid var(--border-2)',
+              background: 'var(--bg-3)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              margin: '0 auto 12px', fontSize: 20,
+            }}>
+              ▶
+            </div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>
+              Click Preview to render
+            </div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-3)' }}>
+              {config.width} × {config.height}
+            </div>
           </div>
         )}
       </div>
